@@ -4,6 +4,20 @@
 # list see the documentation:
 # https://www.sphinx-doc.org/en/master/usage/configuration.html
 
+# -- For multiple versions --------------------------------------------------------------
+
+from sphinx_polyversion.api import load
+
+load(globals())
+# This adds the following to the global scope
+# html_context = {
+#     "revisions": [GitRef('main', ...), GitRef('v6.8.9', ...), ...],
+#     "current": GitRef('v1.4.6', ...),
+# }
+
+# process the loaded version information as you wish
+html_context["latest"] = max(html_context["revisions"]) # latest by date
+
 # -- Path setup --------------------------------------------------------------
 
 # If extensions (or modules to document with autodoc) are in another directory,
