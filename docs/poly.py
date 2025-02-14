@@ -7,35 +7,25 @@ from sphinx_polyversion.pyvenv import Poetry
 from sphinx_polyversion.sphinx import SphinxBuilder
 
 #: Regex matching the branches to build docs for
-BRANCH_REGEX = r".*"
+BRANCH_REGEX = r"(multi_sphinx)"
 
 #: Regex matching the tags to build docs for
-TAG_REGEX = r".*"
+TAG_REGEX = r""
 
 #: Output dir relative to project root
 OUTPUT_DIR = "docs/build"
 
 #: Source directory
-SOURCE_DIR = "docs/source"
+SOURCE_DIR = "docs"
 
 #: Arguments to pass to `poetry install`
 POETRY_ARGS = "--only sphinx --sync".split()
 
 #: Arguments to pass to `sphinx-build`
-SPHINX_ARGS = "-a -v".split()
+SPHINX_ARGS = []
 
 #: Mock data used for building local version
-MOCK_DATA = {
-    "revisions": [
-        GitRef("v1.8.0", "", "", GitRefType.TAG, datetime.fromtimestamp(0)),
-        GitRef("v1.9.3", "", "", GitRefType.TAG, datetime.fromtimestamp(1)),
-        GitRef("v1.10.5", "", "", GitRefType.TAG, datetime.fromtimestamp(2)),
-        GitRef("master", "", "", GitRefType.BRANCH, datetime.fromtimestamp(3)),
-        GitRef("dev", "", "", GitRefType.BRANCH, datetime.fromtimestamp(4)),
-        GitRef("some-feature", "", "", GitRefType.BRANCH, datetime.fromtimestamp(5)),
-    ],
-    "current": GitRef("local", "", "", GitRefType.BRANCH, datetime.fromtimestamp(6)),
-}
+MOCK_DATA = {}
 #: Whether to build using only local files and mock data
 MOCK = False
 
@@ -63,4 +53,4 @@ DefaultDriver(
     template_dir=root / src / "templates",
     static_dir=root / src / "static",
     mock=MOCK_DATA,
-).run(MOCK, SEQUENTIAL)
+).run(MOCK)

@@ -1,0 +1,38 @@
+[build-system]
+requires = [
+    "setuptools",
+]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cosipy"
+dynamic = ["version"]
+authors = [
+  {name = "COSI Team", email = "imc@umd.edu"},
+]
+description = "High-level analysis for the COSI telescope data"
+readme = 'README.md'
+dependencies = [
+    "histpy",
+    "mhealpy",
+    "scoords",
+    'astromodels>=2.4.2',
+    'threeml>=2.1.2',
+    'matplotlib<=3.8.3',
+    'numba',
+    'yayc',
+    'awscli',
+    'scipy<=1.13.0'
+ ]
+
+[project.urls]
+Documentation = "https://cositools.github.io/cosipy"
+Repository = "https://github.com/cositools/cosipy"
+
+[tool.setuptools.packages.find]
+where = []
+include = ["cosipy", "cosipy.*"]
+namespaces = false
+
+[project.scripts]
+cosi-response = "cosipy.response.FullDetectorResponse:cosi_response"
