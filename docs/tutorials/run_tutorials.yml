@@ -192,7 +192,7 @@ tutorials:
         - source_injector/model_injected.h5
       wasabi_files:
         COSI-SMEX/develop/Data/Orientation/20280301_3_month_with_orbital_info.fits:
-          checksum: bf59c4b79bc95ab68bcd376357f7bd40
+          checksum: 5e69bc1d55fab9390f90635690f62896
         COSI-SMEX/cosipy_tutorials/source_injector/crab_3months_unbinned_data.hdf5:
           checksum: 787f17ee7c23e5b94fb77cc52a117422
         COSI-SMEX/develop/Data/Responses/SMEXv12.Continuum.HEALPixO3_10bins_log_flat.binnedimaging.imagingresponse.h5:
