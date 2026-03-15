@@ -113,11 +113,11 @@ class PolarizationAxis(Axis):
 
         super()._write_metadata(axis_set)
 
-        convention = PolarizationConvention.get_convention_registered_name(self._convention)
+        convention = self._convention.registered_name
 
         if convention is None:
-            raise RuntimeError(f"Only PolarizationAxis object with a registered named convention "
-                               "can be saved disk")
+            raise RuntimeError(f"Only PolarizationAxis objects with a registered named convention "
+                               "can be saved to disk")
 
         axis_set.attrs['convention'] = convention
 
@@ -152,11 +152,6 @@ class PolarizationAxis(Axis):
 
         metadata = super()._open_metadata(dataset)
 
-        metadata['convention'] = dataset['convention']
+        metadata['convention'] = dataset.attrs['convention']
 
         return metadata
-
-
-
-
-

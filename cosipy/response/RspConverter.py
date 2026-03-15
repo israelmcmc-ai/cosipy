@@ -2,12 +2,15 @@ import logging
 logger = logging.getLogger(__name__)
 
 from pathlib import Path
-
 import gzip
+import re
 
 import numpy as np
 
+import astropy.units as u
+
 from histpy import Axes, Axis, HealpixAxis
+from cosipy.polarization import PolarizationAxis
 
 from scoords import SpacecraftFrame
 
@@ -39,43 +42,41 @@ class RspConverter():
     # axis labels in HDF5 file
     axis_name_map = {
         # ground truth axes
-        '"Initial energy [keV]"'      : "Ei",
-        '"#nu [deg]" "#lambda [deg]"' : "NuLambda",
-        '"Polarization Angle [deg]"'  : "Pol",
+        'Initial energy'      : "Ei",
+        '#nu|#lambda'         : "NuLambda",
+        'Polarization Angle'  : "Pol",
 
         # absolute CDS axes
-        '"Measured energy [keV]"'     : "Em",
-        '"#psi [deg]" "#chi [deg]"'   : "PsiChi",
-        '"#phi [deg]"'                : "Phi",  # used for relative too
+        'Measured energy'     : "Em",
+        '#psi|#chi'           : "PsiChi",
+        '#phi'                : "Phi",  # used for relative too
 
         # relative CDS axes
-        '"Epsilon"'                   : "Epsilon",
-        '"#theta [deg]"'              : "Theta",
-        '"#zeta [deg]"'               : "Zeta",
+        'Epsilon'             : "Epsilon",
+        '#theta'              : "Theta",
+        '#zeta'               : "Zeta",
 
         # other axes
-        '"#sigma [deg]" "#tau [deg]"' : "SigmaTau",
-        '"Distance [cm]"'             : "Dist"
+        '#sigma|#tau'         : "SigmaTau",
+        'Distance'            : "Dist"
     }
 
-    # parameters for non-Healpix axes
-    # (unit, scale)
-    axis_params = {
+    # scale for non-Healpix, non-polarization axes
+    axis_scale = {
         # ground truth axes
-        "Ei"      : ("keV", "log"),
-        "Pol"     : ("deg", "linear"),
+        "Ei"      : "log",
 
         # absolute CDS axes
-        "Em"      : ("keV", "log"),
-        "Phi"     : ("deg", "linear"), # used for relative too
+        "Em"      : "log",
+        "Phi"     : "linear", # used for relative too
 
         # relative CDS axes
-        "Epsilon" :  ("",    "linear"),
-        "Theta"   :  ("deg", "linear"),
-        "Zeta"    :  ("deg", "linear"),
+        "Epsilon" :  "linear",
+        "Theta"   :  "linear",
+        "Zeta"    :  "linear",
 
         # other axes
-        "Dist":     ("cm",  "linear")
+        "Dist"    :  "linear"
     }
 
     # textual descriptions of each axis (used for pretty-printing)
@@ -407,21 +408,24 @@ class RspConverter():
         assert hdr["nbins"] > 0, \
             "no bin count provided for response"
 
-        axes_labels = [ RspConverter.axis_name_map[n] for n in axes_names ]
+        axes_info = [ self._parse_megalib_axis_name(n) for n in axes_names ]
 
         # Decide whether this is an absolute or relative response
-        if self.get_cds_type(axes_labels) == "relative":
+        # based on axis names
+        if self.get_cds_type([ai[0] for ai in axes_info]) == "relative":
             fd_axis_order = RspConverter.fd_axis_order_rel
         else:
             fd_axis_order = RspConverter.fd_axis_order_abs
 
         # Construct Axes object from specified axes' properties
         axes = []
-        for axis_edges, axis_type, axis_label in \
-            zip(axes_edges, axes_types, axes_labels):
+        for axis_edges, axis_type, axis_info in \
+            zip(axes_edges, axes_types, axes_info):
+
+            axis_label, axis_unit, axis_rest = axis_info
 
             # skip axes that are not in HDF5 axis order; we assume that
-            # these axes are *not* dimeisions of the counts data!
+            # these axes are *not* dimensions of the counts data!
             if axis_label not in fd_axis_order:
                 continue
 
@@ -438,14 +442,80 @@ class RspConverter():
                                             scheme=scheme,
                                             coordsys=SpacecraftFrame(),
                                             label=axis_label))
+            elif axis_label == "Pol": # polarization axis
+                axes.append(PolarizationAxis(edges=axis_edges,
+                                             unit=axis_unit,
+                                             convention=axis_rest[0],
+                                             label=axis_label))
             else:
-                unit, scale = RspConverter.axis_params[axis_label]
-                axes.append(Axis(edges=axis_edges, unit=unit,
+                scale = RspConverter.axis_scale[axis_label]
+                axes.append(Axis(edges=axis_edges, unit=axis_unit,
                                  scale=scale, label=axis_label))
 
         axes = Axes(axes, copy_axes = False)
 
         return axes, hdr, fd_axis_order
+
+    def _parse_megalib_axis_name(self, axis_name):
+        """
+        Parse the info in a MEGAlib axis name.  A name is a concatenation
+        of one or more quoted chunks, each of which contains an axis name
+        and zero or more attributes; the latter are in square brackets.
+        The first attribute, if present, is an axis unit.
+
+        Parameters
+        ----------
+        axis_name : str
+          axis name string
+        Returns
+        -------
+        tuple (name, unit, rest)
+          name : canonical axis name used in response
+          unit : astropy.Unit of axis (u.dimensionless_unscaled if none)
+          rest : a list of any remaining attribute strings
+
+        """
+
+        def _parse_chunk(chunk):
+            # a chunk consists of a name string (possibly with embedded
+            # spaces) followed by zero or more attributes in
+            # square brackets [].
+            attr_start = chunk.find("[")
+            if attr_start > 0:
+                name =  chunk[:attr_start]
+                attrs = [f[1:-1] for f in re.findall(r'\[[^\[]+\]+',
+                                                     chunk[attr_start:])]
+            else:
+                name = chunk
+                attrs = []
+
+            # return pair with name, list of attrs
+            return name.strip(), attrs
+
+        # an axis name consists of one or more double-quoted chunks;
+        # parse them out of the name first
+        chunks = [f[1:-1] for f in re.findall(r'"[^"]*"', axis_name)]
+
+        # if an axis name has two or more chunks, it is a HEALPix
+        # axis; concatenate the chunk names to get the axis name map
+        # key and ignore all other info in the chunks
+        if len(chunks) > 1:
+            cnames = []
+            for chunk in chunks:
+                cnames.append(_parse_chunk(chunk)[0])
+                name = "|".join(cnames)
+            unit = u.dimensionless_unscaled # HEALPix axes have no unit
+            rest = []
+        else:
+            name, attrs = _parse_chunk(chunks[0])
+            if len(attrs) == 0:
+                unit = u.dimensionless_unscaled
+            else:
+                unit = u.Unit(attrs[0])
+
+            rest = attrs[1:]
+
+        return RspConverter.axis_name_map[name], unit, rest
 
     def _validate_norm_params(self, norm, params):
         """
@@ -1013,6 +1083,26 @@ class RspConverter():
         for desc in RspConverter.axis_name_map:
             axis_names[RspConverter.axis_name_map[desc]] = desc
 
+        def format_megalib_axis_name(axis):
+            # recreate a valid MEGAlib axis name from an axis
+
+            desc = axis_names[axis.label]
+
+            if isinstance(axis, HealpixAxis):
+                chunk_names = desc.split("|")
+
+                # units are irrelevant for HEALPix axes but should be present
+                name = " ".join([f'"{n} [deg]"' for n in chunk_names])
+            elif isinstance(axis, PolarizationAxis):
+                name = f'"{desc} [{str(axis.unit)}] [{axis.convention.registered_name}]"'
+            else:
+                if axis.unit == u.dimensionless_unscaled:
+                    name = f'"{desc}"'
+                else:
+                    name = f'"{desc} [{str(axis.unit)}]"'
+
+            return name
+
         with self._open_rsp(rsp_filename, "wt") as f:
 
             f.write("# computed reduced response\n")
@@ -1023,7 +1113,7 @@ class RspConverter():
 
             # write axes
             for axis in axes:
-                f.write(f"AN {axis_names[axis.label]}\n")
+                f.write(f"AN {format_megalib_axis_name(axis)}\n")
 
                 if isinstance(axis, HealpixAxis):
                     f.write("AT 2D HEALPix\n")

@@ -49,6 +49,10 @@ class PolarizationAngle:
         return self._angle
 
     @property
+    def value(self):
+        return self._angle.value
+
+    @property
     def convention(self):
         return self._convention
 
