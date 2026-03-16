@@ -133,14 +133,13 @@ class FullDetectorResponse(HealpixBase):
 
         if 'Pol' in new._axes.labels:
             pol_axis = new._axes['Pol']
-            if isinstance(pol_axis, PolarizationAxis):
-                # explicitly provided convention overrides file
-                if pa_convention is None:
-                    pa_convention = pol_axis.convention.registered_name
-            elif pa_convention is None:
-                pa_convention = 'relativex'
 
-            pa_convention = pa_convention.lower()
+            if pa_convention is None:
+                if isinstance(pol_axis, PolarizationAxis):
+                    # use convention in file; provided convention overrides
+                    pa_convention = pol_axis.convention.registered_name
+            else:
+                pa_convention = pa_convention.lower()
 
             if pa_convention not in ('relativex', 'relativey', 'relativez'):
                 raise RuntimeError("Polarization angle convention of response "
