@@ -296,8 +296,8 @@ class RspConverter():
         rsp_file : file handle
           open .rsp file
         pa_convention : string, optional
-          polarization axis convention for pol response if the RSP file
-          has no convention; ignored if it does.
+          polarization axis convention for pol response if the RSP
+          file has no convention; ignored if it does.
 
         Returns
         -------
@@ -359,7 +359,7 @@ class RspConverter():
                 case 'RD': # start of data for sparse .rsp
                     raise RuntimeError("Not supported: sparse .rsp files")
 
-                case 'PO': # polarization convention for Pol axis
+                case 'PO': # polarization convention for Pol axis, if any
                     hdr["pa_convention"] = line[1]
                     hdr["headers"][key] = " ".join(line[1:])
 
@@ -455,11 +455,13 @@ class RspConverter():
                                             scheme=scheme,
                                             coordsys=SpacecraftFrame(),
                                             label=axis_label))
+
             elif axis_label == "Pol": # polarization axis
                 if hdr["pa_convention"] is None:
-                    # user must provide pa_convention, as none is in file
+                    # user must provide pa_convention, as none was in file
                     if pa_convention is None:
-                        raise RuntimeError("RSP file does not contain a polarization convention; please provide one or add a 'PO' header.")
+                        raise RuntimeError("rsp file does not contain a polarization convention; "
+                                           "please provide one or add a 'PO' header.")
                     else:
                         # make sure we store a polarization convention header,
                         # even if the original file lacks one
@@ -470,6 +472,7 @@ class RspConverter():
                                              unit=axis_unit,
                                              convention=hdr["pa_convention"],
                                              label=axis_label))
+
             else:
                 scale = RspConverter.axis_scale[axis_label]
                 axes.append(Axis(edges=axis_edges, unit=axis_unit,
@@ -1134,7 +1137,7 @@ class RspConverter():
 
             # upgrade polarization response if the headers of the original
             # RSP file did not include the convention
-            if "PO" not in headers and "Pol" in axes.labels:
+            if "Pol" in axes.labels and "PO" not in headers:
                 f.write(f"PO {axes['Pol'].convention.registered_name}\n")
 
             # write axes
