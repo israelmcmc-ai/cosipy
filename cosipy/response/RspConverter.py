@@ -202,7 +202,8 @@ class RspConverter():
                       h5_filename = None,
                       overwrite = False,
                       compress = True,
-                      elt_type = None):
+                      elt_type = None,
+                      pa_convention = None):
 
         """
         Given a response file in .rsp format, read it
@@ -224,7 +225,9 @@ class RspConverter():
            type used to store raw event counts; if None,
            infer smallest feasible type from data (requires
            reading the .rsp file twice!)
-
+        pa_convention: string, optional
+           Polarization angle convention for polarization axis -- used
+           only if not present in the RSP file.
         Returns
         -------
         string : name of output file
@@ -247,7 +250,7 @@ class RspConverter():
         # read all info from the .rsp file
         with self._open_rsp(rsp_filename, "rt") as f:
 
-            axes, hdr, fd_axis_order = self._read_response_header(f)
+            axes, hdr, fd_axis_order = self._read_response_header(f, pa_convention)
             eff_area = self._get_eff_area_correction(axes, hdr)
 
             if elt_type is None:
@@ -279,7 +282,7 @@ class RspConverter():
         return h5_filename
 
 
-    def _read_response_header(self, rsp_file):
+    def _read_response_header(self, rsp_file, pa_convention = None):
         """
         Read the header portion of a response file and construct the
         axes of the response.  Additional header info besides the axes
@@ -290,7 +293,11 @@ class RspConverter():
 
         Parameters
         ----------
-        rsp_file : file handle to open .rsp file
+        rsp_file : file handle
+          open .rsp file
+        pa_convention : string, optional
+          polarization axis convention for pol response if the RSP file
+          has no convention; ignored if it does.
 
         Returns
         -------
@@ -307,7 +314,8 @@ class RspConverter():
             "norm_params" : [],
             "area_sim"    : 0,
             "nbins"       : 0,
-            "headers"     : {}
+            "headers"     : {},
+            "pa_convention" : None
         }
 
         axes_names = []
@@ -322,6 +330,7 @@ class RspConverter():
                 continue # skip blanks and comments
 
             key = line[0]
+
             match key:
                 case 'TS':
                     hdr["nevents_sim"] = int(line[1])
@@ -349,6 +358,10 @@ class RspConverter():
 
                 case 'RD': # start of data for sparse .rsp
                     raise RuntimeError("Not supported: sparse .rsp files")
+
+                case 'PO': # polarization convention for Pol axis
+                    hdr["pa_convention"] = line[1]
+                    hdr["headers"][key] = " ".join(line[1:])
 
                 case 'AN':
                     axes_names.append(' '.join(line[1:]))
@@ -422,7 +435,7 @@ class RspConverter():
         for axis_edges, axis_type, axis_info in \
             zip(axes_edges, axes_types, axes_info):
 
-            axis_label, axis_unit, axis_rest = axis_info
+            axis_label, axis_unit, _ = axis_info
 
             # skip axes that are not in HDF5 axis order; we assume that
             # these axes are *not* dimensions of the counts data!
@@ -443,9 +456,19 @@ class RspConverter():
                                             coordsys=SpacecraftFrame(),
                                             label=axis_label))
             elif axis_label == "Pol": # polarization axis
+                if hdr["pa_convention"] is None:
+                    # user must provide pa_convention, as none is in file
+                    if pa_convention is None:
+                        raise RuntimeError("RSP file does not contain a polarization convention; please provide one or add a 'PO' header.")
+                    else:
+                        # make sure we store a polarization convention header,
+                        # even if the original file lacks one
+                        hdr["pa_convention"] = pa_convention
+                        hdr["headers"]["PO"] = hdr["pa_convention"]
+
                 axes.append(PolarizationAxis(edges=axis_edges,
                                              unit=axis_unit,
-                                             convention=axis_rest[0],
+                                             convention=hdr["pa_convention"],
                                              label=axis_label))
             else:
                 scale = RspConverter.axis_scale[axis_label]
@@ -1093,8 +1116,6 @@ class RspConverter():
 
                 # units are irrelevant for HEALPix axes but should be present
                 name = " ".join([f'"{n} [deg]"' for n in chunk_names])
-            elif isinstance(axis, PolarizationAxis):
-                name = f'"{desc} [{str(axis.unit)}] [{axis.convention.registered_name}]"'
             else:
                 if axis.unit == u.dimensionless_unscaled:
                     name = f'"{desc}"'
@@ -1110,6 +1131,11 @@ class RspConverter():
             # write non-axis headers
             for key in headers:
                 f.write(f"{key} {headers[key]}\n")
+
+            # upgrade polarization response if the headers of the original
+            # RSP file did not include the convention
+            if "PO" not in headers and "Pol" in axes.labels:
+                f.write(f"PO {axes['Pol'].convention.registered_name}\n")
 
             # write axes
             for axis in axes:
