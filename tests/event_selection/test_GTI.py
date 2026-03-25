@@ -22,6 +22,7 @@ class DummySpacecraftHistory(SpacecraftHistory):
             earth_occ = np.zeros_like(self._colatitude, dtype=bool)
         self._earth_occ = np.asarray(earth_occ, dtype=bool)
         self._attitude = attitude  # optional: scoords.Attitude for from_region_cut
+        self._occ_call_idx = 0     # row counter for 2D earth_occ (from_region_cut)
 
     @property
     def intervals_tstart(self):
@@ -49,6 +50,12 @@ class DummySpacecraftHistory(SpacecraftHistory):
                         unit='rad', frame=SpacecraftFrame())
 
     def get_earth_occ(self, source):
+        # 2D (n_on_pix, npoints): return one row per call (from_region_cut)
+        if self._earth_occ.ndim == 2:
+            row = self._earth_occ[self._occ_call_idx]
+            self._occ_call_idx += 1
+            return row
+        # 1D (npoints,): return as-is (from_pointing_cut)
         return self._earth_occ
 
 
@@ -236,39 +243,44 @@ def test_from_region_cut_all_in():
     assert gti.tstop_list[0]  == Time(60975., format='mjd', scale='utc')
 
 
-def test_from_region_cut_earth_occ_all():
+def test_from_region_cut_earth_occ_all_vs_any():
     """
-    mode='all': bin 4 is occulted for one on-region pixel -> excluded.
-    Result: only the first interval [60971, 60973] survives.
-    """
-    region = _make_region()
-    sc = _make_sc_region(region, [False, True, True, False, True])
-
-    # earth_occ is 1D (npoints=6); get_earth_occ is called once per on-region pixel.
-    # Occulted at edge-point 4 for the first pixel only.
-    sc._earth_occ = np.array([False, False, False, False, True, False])
-
-    gti = GoodTimeInterval.from_region_cut(region, sc, earth_occ=True, earth_occ_mode='all')
-
-    assert len(gti) == 1
-    assert np.all(gti.tstart_list == Time([60971.], format='mjd', scale='utc'))
-    assert np.all(gti.tstop_list  == Time([60973.], format='mjd', scale='utc'))
-
-
-def test_from_region_cut_earth_occ_any():
-    """
-    mode='any': bin 4 has one pixel occulted but others are fine -> kept.
-    Result: both intervals survive unchanged.
+    Verify that earth_occ_mode='all' and 'any' produce different results.
+ 
+    Setup: all 5 bins point into the region.
+    - bin 1: all on-region pixels occulted  -> excluded by both 'all' and 'any'
+    - bin 3: only pixel 0 occulted          -> excluded by 'all', kept by 'any'
+ 
+    Expected:
+      mode='all': [T,F,T,F,T] -> 3 intervals
+      mode='any': [T,F,T,T,T] -> bin 2,3,4 merge -> 2 intervals
     """
     region = _make_region()
-    sc = _make_sc_region(region, [False, True, True, False, True])
-    sc._earth_occ = np.array([False, False, False, False, True, False])
-
-    gti = GoodTimeInterval.from_region_cut(region, sc, earth_occ=True, earth_occ_mode='any')
-
-    assert len(gti) == 1
-    assert np.all(gti.tstart_list == Time([60971.], format='mjd', scale='utc'))
-    assert np.all(gti.tstop_list  == Time([60973.], format='mjd', scale='utc'))
+    n_on = int(np.sum(np.asarray(region[:], dtype=bool)))
+ 
+    # earth_occ 2D: shape (n_on, npoints=6)
+    earth_occ = np.zeros((n_on, 6), dtype=bool)
+    earth_occ[:, 1] = True   # bin 1: all pixels occulted
+    earth_occ[0, 3] = True   # bin 3: only pixel 0 occulted
+ 
+    sc_all = _make_sc_region(region, [True, True, True, True, True])
+    sc_all._earth_occ = earth_occ
+ 
+    sc_any = _make_sc_region(region, [True, True, True, True, True])
+    sc_any._earth_occ = earth_occ
+ 
+    gti_all = GoodTimeInterval.from_region_cut(region, sc_all, earth_occ=True, earth_occ_mode='all')
+    gti_any = GoodTimeInterval.from_region_cut(region, sc_any, earth_occ=True, earth_occ_mode='any')
+ 
+    # mode='all': bin 1 and bin 3 both excluded -> 3 separate intervals
+    assert len(gti_all) == 3
+    assert np.all(gti_all.tstart_list == Time([60970., 60972., 60974.], format='mjd', scale='utc'))
+    assert np.all(gti_all.tstop_list  == Time([60971., 60973., 60975.], format='mjd', scale='utc'))
+ 
+    # mode='any': only bin 1 excluded; bin 3 kept -> bin 2,3,4 merge into one interval
+    assert len(gti_any) == 2
+    assert np.all(gti_any.tstart_list == Time([60970., 60972.], format='mjd', scale='utc'))
+    assert np.all(gti_any.tstop_list  == Time([60971., 60975.], format='mjd', scale='utc'))
 
 
 def test_from_region_cut_invalid_earth_occ_mode():
