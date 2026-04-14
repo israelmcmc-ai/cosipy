@@ -14,7 +14,7 @@ from scoords import SpacecraftFrame, Attitude
 from mhealpy import HealpixBase
 
 from histpy import Axes, HealpixAxis
-from cosipy.polarization import PolarizationAxis
+from cosipy.polarization import PolarizationConvention, PolarizationAxis
 
 from .DetectorResponse import DetectorResponse
 from .PointSourceResponse import PointSourceResponse
@@ -56,10 +56,9 @@ class FullDetectorResponse(HealpixBase):
              Dtype of values to be returned when accessing response
              contents. If None, use the type stored in the file
         pa_convention : str, optional
-             Polarization convention of response (must be one of
-             "RelativeX", "RelativeY", or "RelativeZ"). If not provided,
-             use convention stored in Polarization axis of response,
-             if present, or "RelativeX" if not
+             Polarization angle convention of response. If not provided,
+             use convention stored in pa_convention attribute of response
+             file, if present.
         cache_size : int, optional
             Number of NuLambda slices' worth of memory to allocate to
             cache response chunks; if None, use default (which is too
@@ -88,10 +87,9 @@ class FullDetectorResponse(HealpixBase):
              contents. If None, use the type stored in the file
              (specifically, the type of EFF_AREA)
         pa_convention : str, optional
-             Polarization convention of response (must be one of
-             "RelativeX", "RelativeY", or "RelativeZ"). If not provided,
-             use convention stored in Polarization axis of response,
-             if present, or "RelativeX" if not
+             Polarization angle convention of response. If not provided,
+             use convention stored in pa_convention attribute of response
+             file, if present.
          cache_size : int, optional
             Number of NuLambda slices' worth of memory to allocate to
             cache response chunks; if None, use default (which is too
@@ -104,7 +102,7 @@ class FullDetectorResponse(HealpixBase):
         new._drm = new._file['DRM']
 
         # verify response format version
-        rsp_version = new._drm.attrs.get('VERSION', default=1)
+        rsp_version = new._drm.attrs.get("VERSION", default=1)
         if rsp_version != cls.rsp_version:
             raise RuntimeError(f"Response format is version {rsp_version}; we require version {cls.rsp_version}")
 
@@ -116,7 +114,7 @@ class FullDetectorResponse(HealpixBase):
         # axes minus NuLambda -- used for getting pixel slices for PSRs
         new._rest_axes = new._axes[1:]
 
-        new._unit = u.Unit(new._drm.attrs['UNIT'])
+        new._unit = u.Unit(new._drm.attrs["UNIT"])
 
         # effective area correction for counts
         ea = np.array(new._drm["EFF_AREA"])
@@ -131,28 +129,51 @@ class FullDetectorResponse(HealpixBase):
                              base=new._axes['NuLambda'],
                              coordsys=SpacecraftFrame())
 
-        if 'Pol' in new._axes.labels:
-            pol_axis = new._axes['Pol']
+        # retrieve Pol axis, if any
+        pol_axis = new._axes['Pol'] \
+            if 'Pol' in new._axes.labels \
+               else None
 
-            if pa_convention is None:
-                if isinstance(pol_axis, PolarizationAxis):
-                    # use convention in file; provided convention overrides
-                    pa_convention = pol_axis.convention.registered_name
-            else:
-                pa_convention = pa_convention.lower()
+        # prefer the pa_convention actually in the response file...
+        file_pa_convention = new._drm.attrs.get("PA_CONVENTION")
 
-            if pa_convention not in ('relativex', 'relativey', 'relativez'):
-                raise RuntimeError("Polarization angle convention of response "
-                                   "('RelativeX', 'RelativeY', or 'RelativeZ') must be provided")
+        # but if it is not specified, use the pa_convention of the Pol
+        # axis, if any
+        if isinstance(pol_axis, PolarizationAxis):
+                axis_pa_convention = pol_axis.convention.registered_name
+                if file_pa_convention is None:
+                    file_pa_convention = axis_pa_convention
+                else:
+                    print(file_pa_convention, axis_pa_convention)
+                    assert file_pa_convention == axis_pa_convention
 
-            # convert legacy polarization responses to use a real PolarizationAxis
-            if not isinstance(pol_axis, PolarizationAxis):
-                new._axes.set('Pol',
-                              PolarizationAxis(pol_axis.edges,
-                                               pa_convention,
-                                               pol_axis.label,
-                                               pol_axis.unit),
-                              copy=False)
+        # if nothing in file, use the provided argument, if any
+        if file_pa_convention is None:
+            file_pa_convention = None if pa_convention is None else pa_convention.lower()
+
+        # response needs a PA convention if it has a Pol
+        # axis or is a relative CDS response
+        needs_pa_convention = \
+            pol_axis is not None or \
+            'Zeta' in new._axes.labels
+
+        # if response needs a pa_convention is available, complain
+        if needs_pa_convention and file_pa_convention is None:
+            raise RuntimeError("Response requires a pa_convention; please specify one")
+
+        if file_pa_convention is None:
+            new._pa_convention = None
+        else:
+            new._pa_convention = PolarizationConvention.get_convention(file_pa_convention)
+
+        # convert legacy polarization responses to use a real PolarizationAxis
+        if pol_axis is not None and not isinstance(pol_axis, PolarizationAxis):
+            new._axes.set('Pol',
+                          PolarizationAxis(pol_axis.edges,
+                                           pa_convention,
+                                           pol_axis.label,
+                                           pol_axis.unit),
+                          copy=False)
 
         if (cache_size is not None):
 
@@ -232,6 +253,21 @@ class FullDetectorResponse(HealpixBase):
         """
 
         return self._unit
+
+    @property
+    def pa_convention(self):
+        """
+        Polarization angle convention of response -- defined if it has
+        a polarization axis, or if it uses relative coordinates.  None
+        if not defined for this response.
+
+        Returns
+        -------
+        `PolarizationConvention`
+
+        """
+
+        return self._pa_convention
 
     @property
     def eff_area_correction(self):

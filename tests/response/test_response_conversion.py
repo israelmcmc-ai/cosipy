@@ -90,10 +90,12 @@ def test_convert_rsp_to_h5(tmp_path):
     c.convert_to_h5(rspgz_pol_response_path,
                     h5_filename = tmp_h5_filename,
                     overwrite = True,
-                    compress=False)
+                    compress = False)
 
     fdr = FullDetectorResponse.open(h5_pol_response_path)
     fdr2 = FullDetectorResponse.open(tmp_h5_filename)
+
+    assert fdr.pa_convention.registered_name == fdr2.pa_convention.registered_name
 
     h1 = fdr.to_dr()
     h2 = fdr2.to_dr()
@@ -115,10 +117,11 @@ def test_convert_rsp_to_h5(tmp_path):
     fdr = FullDetectorResponse.open(h5_pol_response_path)
     fdr2 = FullDetectorResponse.open(tmp_h5_filename)
 
+    assert fdr.axes == fdr2.axes
+    assert fdr.pa_convention.registered_name == fdr2.pa_convention.registered_name
+
     h1 = fdr.to_dr()
     h2 = fdr2.to_dr()
-
-    assert fdr.axes == fdr2.axes
 
     fdr.close()
     fdr2.close()
@@ -301,6 +304,7 @@ def test_convert_h5_to_rsp(tmp_path):
     fdr2.close()
 
     assert h1 == h2
+
 def test_relative_response(tmp_path):
 
     tmp_h5_filename = tmp_path / "fdr.h5"
@@ -315,6 +319,8 @@ def test_relative_response(tmp_path):
 
     fdr = FullDetectorResponse.open(h5_rel_response_path)
     fdr2 = FullDetectorResponse.open(tmp_h5_filename)
+
+    assert fdr.pa_convention.registered_name == fdr2.pa_convention.registered_name
 
     h1 = fdr.to_dr()
     h2 = fdr2.to_dr()
@@ -338,6 +344,8 @@ def test_relative_response(tmp_path):
     tmp_h5_filename = c.convert_to_h5(tmp_rspgz_filename, overwrite=True)
 
     fdr2 = FullDetectorResponse.open(tmp_h5_filename)
+
+    assert fdr.pa_convention.registered_name == fdr2.pa_convention.registered_name
 
     h1 = fdr.to_dr()
     h2 = fdr2.to_dr()

@@ -205,8 +205,7 @@ class RspConverter():
                       elt_type = None,
                       pa_convention = None):
 
-        """
-        Given a response file in .rsp format, read it
+        """Given a response file in .rsp format, read it
         and write it out as an HDF5 file
 
         Parameters
@@ -226,8 +225,10 @@ class RspConverter():
            infer smallest feasible type from data (requires
            reading the .rsp file twice!)
         pa_convention: string, optional
-           Polarization angle convention for polarization axis -- used
-           only if not present in the RSP file.
+           Polarization angle convention for polarization axis, or for
+           relative coordinate theta/zeta axes -- used only if not
+           present in the RSP file.
+
         Returns
         -------
         string : name of output file
@@ -269,7 +270,7 @@ class RspConverter():
         # constitute the index of each chunk
         h5_file, n_idx_axes = \
             self._create_h5(axes, elt_type, eff_area, h5_filename,
-                            compress=compress, headers=hdr["headers"])
+                            hdr, compress=compress)
 
         # transpose counts into the output axis order
         counts = counts.transpose(idx_order)
@@ -296,8 +297,9 @@ class RspConverter():
         rsp_file : file handle
           open .rsp file
         pa_convention : string, optional
-          polarization axis convention for pol response if the RSP
-          file has no convention; ignored if it does.
+          polarization angle convention for polarization axis, or for
+          relative coordinate theta/zeta axes -- used only if not
+          present in the RSP file.
 
         Returns
         -------
@@ -359,9 +361,9 @@ class RspConverter():
                 case 'RD': # start of data for sparse .rsp
                     raise RuntimeError("Not supported: sparse .rsp files")
 
-                case 'PO': # polarization convention for Pol axis, if any
-                    hdr["pa_convention"] = line[1]
+                case 'PO': # convention for Pol axis and/or relative coords
                     hdr["headers"][key] = " ".join(line[1:])
+                    hdr["pa_convention"] = line[1].lower()
 
                 case 'AN':
                     axes_names.append(' '.join(line[1:]))
@@ -425,10 +427,26 @@ class RspConverter():
 
         # Decide whether this is an absolute or relative response
         # based on axis names
-        if self.get_cds_type([ai[0] for ai in axes_info]) == "relative":
+        is_relative = (self.get_cds_type([ai[0] for ai in axes_info]) == "relative")
+        if is_relative:
             fd_axis_order = RspConverter.fd_axis_order_rel
         else:
             fd_axis_order = RspConverter.fd_axis_order_abs
+
+        # make sure we have a polarization angle convention if one is
+        # needed
+        if is_relative or any(ai[0] == "Pol" for ai in axes_info):
+            if hdr["pa_convention"] is None:
+                # user must provide pa_convention, as none in file
+                if pa_convention is None:
+                    raise RuntimeError("rsp file does not contain a polarization angle convention; "
+                                       "please provide one or add a 'PO' header.")
+                else:
+                    # make sure we store a pa_convention header, even
+                    # if the original file lacks one
+                    hdr["headers"]["PO"] = pa_convention
+                    hdr["pa_convention"] = pa_convention.lower()
+
 
         # Construct Axes object from specified axes' properties
         axes = []
@@ -456,18 +474,7 @@ class RspConverter():
                                             coordsys=SpacecraftFrame(),
                                             label=axis_label))
 
-            elif axis_label == "Pol": # polarization axis
-                if hdr["pa_convention"] is None:
-                    # user must provide pa_convention, as none was in file
-                    if pa_convention is None:
-                        raise RuntimeError("rsp file does not contain a polarization convention; "
-                                           "please provide one or add a 'PO' header.")
-                    else:
-                        # make sure we store a polarization convention header,
-                        # even if the original file lacks one
-                        hdr["pa_convention"] = pa_convention
-                        hdr["headers"]["PO"] = hdr["pa_convention"]
-
+            elif axis_label == "Pol":
                 axes.append(PolarizationAxis(edges=axis_edges,
                                              unit=axis_unit,
                                              convention=hdr["pa_convention"],
@@ -740,7 +747,7 @@ class RspConverter():
 
     @staticmethod
     def _create_h5(axes, counts_dtype, eff_area, h5_filename,
-                  compress=True, headers=None):
+                   hdr, compress=True):
         """
         Create the HDF5 file to hold the response, writing everything
         except the raw counts.  All data is stored in a group "DRM"
@@ -770,11 +777,6 @@ class RspConverter():
         also an AXIS_DESCRIPTIONS group whose attributes are brief
         textual descriptions of each named axis.
 
-        If headers is not None, it is a dictionary of header keys, each
-        giving the contents of the line with that key in the .rsp file.
-        These key/contents pairs are stored as attributes of a HEADERS
-        group.
-
         Parameters
         ----------
         axes : Axes object
@@ -787,9 +789,8 @@ class RspConverter():
           file name to be written
         compress : bool
           True iff HDF5 file should use internal compression
-        headers : dict or None
-          dictionary of keys and contents of header lines other than axis info,
-          to be written to the HEADERS group
+        her : dict
+          header information collected during response parsing
 
         Returns
         -------
@@ -812,20 +813,21 @@ class RspConverter():
         drm.attrs["VERSION"] = RspConverter.rsp_version
 
         header_group = drm.create_group('HEADERS')
-        if headers is not None:
-            # save any header values not deducible from Axes or contents
-            for key in headers:
-                header_group.attrs[key] = headers[key]
+        headers = hdr["headers"]
 
-            # record how the header keys should be permuted when we
-            # reread them from the file to recover the original order
-            drm.attrs["HEADER_ORDER"] = inv_perm(np.argsort(list(headers.keys())))
-        else:
-            # no headers
-            drm.attrs["HEADER_ORDER"] = np.array([])
+        # save any header values not deducible from Axes or contents
+        for key in headers:
+            header_group.attrs[key] = headers[key]
+
+        # record how the header keys should be permuted when we
+        # reread them from the file to recover the original order
+        drm.attrs["HEADER_ORDER"] = inv_perm(np.argsort(list(headers.keys())))
 
         drm.attrs['UNIT'] = 'cm2'
         drm.attrs['SPARSE'] = False
+
+        if hdr["pa_convention"] is not None:
+            drm.attrs['PA_CONVENTION'] = hdr["pa_convention"]
 
         axes_group = drm.create_group('AXES')
         axes.write(axes_group)
@@ -1070,6 +1072,9 @@ class RspConverter():
         else:
             rsp_axis_order = RspConverter.rsp_axis_order_abs
 
+        # pa_convention will be None if not required by response
+        pa_convention = fullDetectorResponse.pa_convention
+
         # reorder axes if needed to match the expected order for an
         # .rsp file
         ax_order = [ ax for ax in rsp_axis_order
@@ -1083,10 +1088,10 @@ class RspConverter():
 
         hdrs = fullDetectorResponse.headers
 
-        self._write_rsp(hdrs, axes, counts, rsp_filename)
+        self._write_rsp(hdrs, pa_convention, axes, counts, rsp_filename)
 
 
-    def _write_rsp(self, headers, axes, counts, rsp_filename):
+    def _write_rsp(self, headers, pa_convention, axes, counts, rsp_filename):
         """
         Write an .rsp file with all necessary info.
 
@@ -1094,6 +1099,8 @@ class RspConverter():
         ----------
         headers : dict
           stored headers from original response
+        pa_convention : PolarizationConvention or None
+          angle convention for polarization axis or relative coords
         axes : Axes
           axes to write
         counts :
@@ -1135,10 +1142,11 @@ class RspConverter():
             for key in headers:
                 f.write(f"{key} {headers[key]}\n")
 
-            # upgrade polarization response if the headers of the original
-            # RSP file did not include the convention
-            if "Pol" in axes.labels and "PO" not in headers:
-                f.write(f"PO {axes['Pol'].convention.registered_name}\n")
+            # if the response has a polarization angle convention,
+            # make sure .rsp file has a PO header, even if the
+            # FullDetectorResponse's saved headers did not have one
+            if pa_convention is not None and "PO" not in headers:
+                f.write(f"PO {pa_convention.registered_name}\n")
 
             # write axes
             for axis in axes:
