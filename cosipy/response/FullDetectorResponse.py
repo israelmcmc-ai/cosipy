@@ -144,7 +144,6 @@ class FullDetectorResponse(HealpixBase):
                 if file_pa_convention is None:
                     file_pa_convention = axis_pa_convention
                 else:
-                    print(file_pa_convention, axis_pa_convention)
                     assert file_pa_convention == axis_pa_convention
 
         # if nothing in file, use the provided argument, if any
