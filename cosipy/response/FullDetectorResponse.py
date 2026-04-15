@@ -111,9 +111,6 @@ class FullDetectorResponse(HealpixBase):
         if new._axes[0].label != "NuLambda":
             raise RuntimeError("Full detector response must have NuLambda as its first dimension")
 
-        # axes minus NuLambda -- used for getting pixel slices for PSRs
-        new._rest_axes = new._axes[1:]
-
         new._unit = u.Unit(new._drm.attrs["UNIT"])
 
         # effective area correction for counts
@@ -173,6 +170,9 @@ class FullDetectorResponse(HealpixBase):
                                            pol_axis.label,
                                            pol_axis.unit),
                           copy=False)
+
+        # axes minus NuLambda -- used for getting pixel slices for PSRs
+        new._rest_axes = new._axes[1:]
 
         if (cache_size is not None):
 
