@@ -31,15 +31,19 @@ class PolarizationAxis(Axis):
                  convention = 'iau',
                  label = None,
                  unit = None,
-                 copy=True):
+                 copy = True):
 
         if isinstance(edges, PolarizationAngle):
             convention = edges.convention if convention is None else convention
             edges = edges.angle
 
-        self._convention = PolarizationConvention.get_convention(convention)
+        if not isinstance(convention, PolarizationConvention):
+            convention = PolarizationConvention.get_convention(convention)
 
-        super().__init__(edges, label = label, scale='linear', unit=unit, copy=copy)
+        self._convention = convention
+
+        super().__init__(edges, label = label, scale='linear',
+                         unit=unit, copy=copy)
 
         if self.unit is None:
             raise ValueError("PolarizationAxis needs edges with units")

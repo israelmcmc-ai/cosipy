@@ -33,37 +33,31 @@ class PolarizationConvention:
     @classmethod
     def get_convention(cls, name, *args, **kwargs):
         """
-        Get an object of a specified PolarizationConvention type.  If
-        an existing object is passed in, it is returned unchanged.
-        Otherwise, a new object of the requested class is instantiated
+        Create an object of a specified PolarizationConvention type
         using the provided *args/**kwargs.
 
         Parameters
         ----------
-        name : one of
-           - existing PolarizationConvention object
+        name : either
            - string [name of a registered polarization convention]
            - subclass of PolarizationConvention
         *args, **kwargs
-           Arguments used if creating new PolarizationConvention object
+           Arguments used to create new convention object
 
         """
-
-        if isinstance(name, PolarizationConvention):
-            return name
-
-        elif inspect.isclass(name) and issubclass(name, PolarizationConvention):
-            return name(*args, **kwargs)
-
-        elif isinstance(name, str):
+        if isinstance(name, str):
             name = name.lower()
 
             try:
                 return cls._registered_conventions[name](*args, **kwargs)
             except KeyError as e:
                 raise Exception(f"No polarization convention by name '{name}'") from e
+
+        elif inspect.isclass(name) and issubclass(name, PolarizationConvention):
+            return name(*args, **kwargs)
+
         else:
-            raise TypeError("Input must be str, PolarizationConvention object, or subclass of PolarizationConvention")
+            raise TypeError("Input must be str or subclass of PolarizationConvention")
 
     @property
     def frame(self):
