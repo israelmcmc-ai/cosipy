@@ -638,7 +638,9 @@ class FullDetectorResponse(HealpixBase):
 
                     # rotate each bin's polarization angle from IAU to
                     # local convention
-                    loc_pol_angles = iau_pol_angles.transform_to(psr_axes['Pol'].convention, att)
+                    conv_type = type(psr_axes['Pol'].convention)
+                    conv_w_att = PolarizationConvention.get_convention(conv_type, att)
+                    loc_pol_angles = iau_pol_angles.transform_to(conv_w_att)
 
                     # wrap 180-degree polarization angles to keep them
                     # within bin range

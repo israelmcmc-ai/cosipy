@@ -13,7 +13,7 @@ from cosipy.data_io import EmCDSBinnedData
 from cosipy.interfaces import BinnedDataInterface
 from cosipy.interfaces.instrument_response_interface import BinnedInstrumentResponseInterface
 
-from cosipy.polarization import PolarizationAngle, PolarizationAxis
+from cosipy.polarization import PolarizationAxis
 from cosipy.response import FullDetectorResponse
 
 from histpy import Axes, Histogram
@@ -288,10 +288,3 @@ class BinnedInstrumentResponse(BinnedInstrumentResponseInterface):
             out = u.Quantity(out.value, weight_unit*out.unit, copy = None)
 
         return out
-
-
-
-
-
-
-

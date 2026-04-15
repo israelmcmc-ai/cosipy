@@ -24,8 +24,6 @@ class PolarizationAxis(Axis):
     unit  (unit-like): Unit for axis (will override unit of edges)
     copy (bool): True if edge array should be distinct from passed-in
                  edges; if False, will use same edge array if possible
-    *args, **kwargs
-        Passed to convention class.
     """
 
     def __init__(self,

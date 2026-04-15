@@ -32,25 +32,38 @@ class PolarizationConvention:
 
     @classmethod
     def get_convention(cls, name, *args, **kwargs):
+        """
+        Get an object of a specified PolarizationConvention type.  If
+        an existing object is passed in, it is returned unchanged.
+        Otherwise, a new object of the requested class is instantiated
+        using the provided *args/**kwargs.
 
-        if inspect.isclass(name):
-            if issubclass(name, PolarizationConvention):
-                return name(*args, **kwargs)
-            else:
-                raise TypeError("Class must be subclass of PolarizationConvention")
+        Parameters
+        ----------
+        name : one of
+           - existing PolarizationConvention object
+           - string [name of a registered polarization convention]
+           - subclass of PolarizationConvention
+        *args, **kwargs
+           Arguments used if creating new PolarizationConvention object
+
+        """
 
         if isinstance(name, PolarizationConvention):
             return name
 
-        if not isinstance(name, str):
-            raise TypeError("Input must be str, or PolarizationConvention subclass or object")
+        elif inspect.isclass(name) and issubclass(name, PolarizationConvention):
+            return name(*args, **kwargs)
 
-        name = name.lower()
+        elif isinstance(name, str):
+            name = name.lower()
 
-        try:
-            return cls._registered_conventions[name](*args, **kwargs)
-        except KeyError as e:
-            raise Exception(f"No polarization convention by name '{name}'") from e
+            try:
+                return cls._registered_conventions[name](*args, **kwargs)
+            except KeyError as e:
+                raise Exception(f"No polarization convention by name '{name}'") from e
+        else:
+            raise TypeError("Input must be str, PolarizationConvention object, or subclass of PolarizationConvention")
 
     @property
     def frame(self):
@@ -79,7 +92,7 @@ class PolarizationConvention:
             particle.
         """
 
-    def get_basis(self, source_direction: SkyCoord, *args, **kwargs):
+    def get_basis(self, source_direction: SkyCoord):
         """
         Get the px,py unit vectors that define the polarization plane on
         this convention. Polarization angle increments from px to py.

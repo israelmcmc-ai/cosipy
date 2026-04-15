@@ -10,7 +10,6 @@ from cosipy.interfaces.photon_parameters import PhotonWithDirectionAndEnergyInSC
     PhotonListWithEnergyInterface, PhotonInterface, PhotonListWithDirectionAndEnergyInSCFrameInterface, \
     PolarizedPhotonListWithDirectionAndEnergyInSCFrameStereographicConventionInterface, \
     PhotonWithDirectionInSCFrameInterface, PhotonListWithDirectionInSCFrameInterface
-from cosipy.polarization import PolarizationAngle
 
 from astropy import units as u
 

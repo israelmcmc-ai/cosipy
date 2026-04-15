@@ -30,8 +30,7 @@ class PolarizationAngle:
         # Ensure pa is an Angle object
         self._angle = Angle(angle)
 
-        self._convention = PolarizationConvention.get_convention(convention,
-                                                                 *args, **kwargs)
+        self._convention = PolarizationConvention.get_convention(convention, *args, **kwargs)
 
         if source is not None:
             if source.size > 1:
