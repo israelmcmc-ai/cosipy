@@ -174,6 +174,11 @@ class FullDetectorResponse(HealpixBase):
         # axes minus NuLambda -- used for getting pixel slices for PSRs
         new._rest_axes = new._axes[1:]
 
+        # axes corresponding to CDS dimensions
+        cds_labels = [ ax.label for ax in new._axes
+                       if ax.label not in ('NuLambda', 'Ei', 'Pol') ]
+        new._cds_axes = new._axes[cds_labels]
+
         if (cache_size is not None):
 
             # Create a cache big enough to hold cache_size NuLambda
@@ -227,7 +232,7 @@ class FullDetectorResponse(HealpixBase):
 
     @property
     def measurement_axes(self):
-        return self.axes['Em', 'Phi', 'PsiChi']
+        return self._cds_axes
 
     @property
     def dtype(self):
