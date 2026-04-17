@@ -88,8 +88,8 @@ class FastTSMap():
             raise ValueError("Response CDS axes must be Em/Phi/PsiChi")
 
         # make sure data and background CDS are ordered to match response
-        self._data = data.todense().project(cds_order)
-        self._bkg_model = bkg_model.todense().project(cds_order)
+        self._data = data.to_dense(copy=False).project(cds_order)
+        self._bkg_model = bkg_model.to_dense(copy=False).project(cds_order)
 
         self._fnf = fnf(max_iter=1000)
 
