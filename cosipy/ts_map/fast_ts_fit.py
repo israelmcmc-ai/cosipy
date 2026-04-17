@@ -304,7 +304,8 @@ class FastTSMap():
         """
 
         if cpu_cores is not None:
-            numba.set_num_threads(cpu_cores)
+            numba.set_num_threads(min(cpu_cores,
+                                      numba.config.NUMBA_NUM_THREADS))
 
         data_cds_array, bkg_model_cds_array, psr_cache = \
             self._prepare_inputs(energy_channel, spectrum, max_cache_size)
