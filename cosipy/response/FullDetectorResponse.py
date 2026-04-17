@@ -112,7 +112,9 @@ class FullDetectorResponse(HealpixBase):
             raise RuntimeError("Full detector response must have NuLambda as its first dimension")
 
         # is this a relative response?
-        new._is_relative_cds = ('Zeta' in new._axes.labels)
+        ax_labels = new._axes.labels
+        new._is_relative_cds = \
+            all(x in ax_labels for x in ('Epsilon', 'Phi', 'Theta', 'Zeta'))
 
         new._unit = u.Unit(new._drm.attrs["UNIT"])
 

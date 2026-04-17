@@ -427,7 +427,9 @@ class RspConverter():
 
         # Decide whether this is an absolute or relative response
         # based on axis names
-        is_relative = (self.get_cds_type([ai[0] for ai in axes_info]) == "relative")
+        is_relative = \
+            (self.get_cds_type([ai[0] for ai in axes_info]) == "relative")
+
         if is_relative:
             fd_axis_order = RspConverter.fd_axis_order_rel
         else:
@@ -1067,7 +1069,7 @@ class RspConverter():
         axes = fullDetectorResponse.axes
 
         # determine if this is an absolute or relative response
-        if self.get_cds_type(axes.labels) == "relative":
+        if fullDetectorResponse.is_relative_cds:
             rsp_axis_order = RspConverter.rsp_axis_order_rel
         else:
             rsp_axis_order = RspConverter.rsp_axis_order_abs
