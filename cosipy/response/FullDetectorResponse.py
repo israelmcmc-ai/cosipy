@@ -111,6 +111,9 @@ class FullDetectorResponse(HealpixBase):
         if new._axes[0].label != "NuLambda":
             raise RuntimeError("Full detector response must have NuLambda as its first dimension")
 
+        # is this a relative response?
+        new._is_relative_cds = ('Zeta' in new._axes.labels)
+
         new._unit = u.Unit(new._drm.attrs["UNIT"])
 
         # effective area correction for counts
@@ -151,7 +154,7 @@ class FullDetectorResponse(HealpixBase):
         # axis or is a relative CDS response
         needs_pa_convention = \
             pol_axis is not None or \
-            'Zeta' in new._axes.labels
+            new._is_relative_cds
 
         # if response needs a pa_convention is available, complain
         if needs_pa_convention and file_pa_convention is None:
@@ -175,8 +178,11 @@ class FullDetectorResponse(HealpixBase):
         new._rest_axes = new._axes[1:]
 
         # axes corresponding to CDS dimensions
-        cds_labels = [ ax.label for ax in new._axes
-                       if ax.label not in ('NuLambda', 'Ei', 'Pol') ]
+        if new._is_relative_cds:
+            cds_labels = ('Epsilon', 'Phi', 'Theta', 'Zeta')
+        else:
+            cds_labels = ('Em', 'Phi', 'PsiChi')
+
         new._cds_axes = new._axes[cds_labels]
 
         if (cache_size is not None):
@@ -229,6 +235,18 @@ class FullDetectorResponse(HealpixBase):
         :py:class:`histpy.Axes`
         """
         return self._axes
+
+    @property
+    def is_relative_cds(self):
+        """
+        True iff this is a relative-CDS response
+
+        Returns
+        -------
+        bool
+        """
+
+        return self._is_relative_cds
 
     @property
     def measurement_axes(self):

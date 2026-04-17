@@ -26,6 +26,7 @@ def test_open():
 
         assert response.shape == tuple(response.axes.nbins)
 
+        assert not response.is_relative_cds
         assert response.pa_convention is None
 
         assert response.eff_area_correction.dtype == np.float32
@@ -49,6 +50,7 @@ def test_open():
 
         assert response.shape == tuple(response.axes.nbins)
 
+        assert response.is_relative_cds
         assert response.pa_convention is not None
 
         assert response.eff_area_correction.dtype == np.float32
@@ -72,6 +74,7 @@ def test_open():
 
         assert response.shape == tuple(response.axes.nbins)
 
+        assert not response.is_relative_cds
         assert response.pa_convention is not None
 
         assert response.eff_area_correction.dtype == np.float32
