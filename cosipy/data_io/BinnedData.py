@@ -393,20 +393,18 @@ class BinnedData(UnBinnedData):
 
         # Main plot:
         if plt_scale == "loglog":
-            plt.loglog(x, y, **plot_kwargs)
+
+        # Include x error bars:
+            if len(x_error) != 0:
+                plt.errorbar(x, y, xerr=x_error, **plot_kwargs)
+                plt.yscale('log')
+                plt.xscale('log')
+            else:
+                plt.loglog(x, y, **plot_kwargs)
         if plt_scale == "semilogx":
             plt.semilogx(x, y, **plot_kwargs)
         if plt_scale == "semilogy":
             plt.semilogy(x, y, **plot_kwargs)
-
-        # Include x error bars:
-        if len(x_error) != 0:
-
-            # Remove label if defined:
-            if "label" in plot_kwargs.keys():
-                plot_kwargs["label"] = "_nolabel_"
-
-            plt.errorbar(x, y, xerr=x_error, **plot_kwargs)
 
         # axes and labels:
         plt.grid(color="grey",alpha=0.3,ls="--")
