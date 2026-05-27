@@ -32,7 +32,7 @@ accommodate new features in cosipy.
   
 Do the following (preferably inside a conda environment)::
 
-    git clone git@github.com:cositools/cosipy.git
+    git clone https://github.com/cositools/cosipy
     cd cosipy
     pip install -e .
 
@@ -48,9 +48,9 @@ specify the ``[ml]`` extra packages during the installation. e.g.::
 
     pip install cosipy[ml]
 
-or, if you are installing from from source::
+or, if you are installing from source::
 
-    pip install '.[ml]'
+    pip install -e '.[ml]'
 
 If you do not install these optional dependencies, then some imports in the
 ``.ml`` submodules will fail. For example::
