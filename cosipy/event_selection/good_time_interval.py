@@ -5,6 +5,8 @@ from astropy.coordinates import SkyCoord
 from astropy.time import Time
 from astropy.io import fits
 
+from histpy import HealpixAxis
+
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     # Guard preventing circulat import
@@ -265,6 +267,19 @@ class GoodTimeInterval():
  
         if earth_occ and earth_occ_mode not in ('all', 'any'):
             raise ValueError(f"earth_occ_mode must be 'all' or 'any', got '{earth_occ_mode}'")
+
+        if region.ndim != 1 or not isinstance(region.axes[0], HealpixAxis):
+            raise ValueError(
+                f"region must be a 1D histogram with a HealpixAxis, "
+                f"got ndim={region.ndim}"
+            )
+
+        region_coordsys = region.axes[0].coordsys
+        if region_coordsys is None or region_coordsys.name != 'galactic':
+            raise ValueError(
+                f"region must be in galactic coordinates, "
+                f"got '{getattr(region_coordsys, 'name', region_coordsys)}'"
+            )
  
         _, _, z_gal = sc_history.attitude[:-1].transform_to('galactic').as_axes()
  
