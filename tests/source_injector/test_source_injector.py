@@ -341,6 +341,8 @@ def test_inject_model():
 
     # Get the data of the injected source
     injected = injector.inject_model(model,
+                                     make_spectrum_plot=True,
+                                     make_PsiChi_plot=True,
                                      data_save_path=file_path)
 
     hist = Histogram.open(file_path)
