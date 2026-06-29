@@ -354,6 +354,11 @@ tutorials:
     gti:
       notebook: event_selection/GTI.ipynb
 
+    pointing_cut:
+      notebook: event_selection/pointing_cut.ipynb
+      ancillary_files:
+        - event_selection/inputs.yaml
+
     lightcurves:
       notebook:
         - light_curves/speclc_grbdc3_prep.ipynb
