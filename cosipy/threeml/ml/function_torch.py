@@ -58,7 +58,7 @@ class FastPowerlawPyTorch(Function1D, metaclass=FunctionMeta):
 
         self.K.unit = y_unit
 
-    # noinspection PyPep8Naming
+    
     def evaluate(self, x, K, piv, index):
         device = "cpu"
 
@@ -137,11 +137,12 @@ class FastGaussianPyTorch(Function1D, metaclass=FunctionMeta):
         # sigma has the same dimensions as x
         self.sigma.unit = x_unit
 
-    # noinspection PyPep8Naming
+    
     def evaluate(self, x, F, mu, sigma):
-
+        device = "cpu"
+        
         norm = self.__norm_const / sigma
-        x = torch.as_tensor(x, dtype=torch.float64)
-        mu = torch.as_tensor(mu, dtype=torch.float64)
+        x = torch.as_tensor(x, dtype=torch.float64, device=device)
+        mu = torch.as_tensor(mu, dtype=torch.float64, device=device)
         sigma = torch.as_tensor(sigma, dtype=torch.float64)
         return F * norm * torch.exp(-torch.pow(x - mu, 2.0) / (2 * torch.pow(sigma, 2.0)))
