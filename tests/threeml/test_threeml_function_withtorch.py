@@ -7,6 +7,7 @@ if not cosipy.with_ml:
 from cosipy.threeml.ml.function_torch import FastPowerlawPyTorch, FastGaussianPyTorch
 import astropy.units as u
 import numpy as np
+import torch 
 
 # ==========================================
 # Tests for FastPowerlawPyTorch
