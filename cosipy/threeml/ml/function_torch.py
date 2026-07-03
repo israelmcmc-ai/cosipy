@@ -60,7 +60,7 @@ class FastPowerlawPyTorch(Function1D, metaclass=FunctionMeta):
 
     
     def evaluate(self, x, K, piv, index):
-        device = "cpu"
+        
 
         if isinstance(x, astropy_units.Quantity):
             x_ = x.value
@@ -74,7 +74,7 @@ class FastPowerlawPyTorch(Function1D, metaclass=FunctionMeta):
             K_, piv_, index_ = K, piv, index
             unit_ = 1.0
 
-        x_t = torch.as_tensor(x_, device=device)
+        x_t = torch.as_tensor(x_, dtype=torch.float64)
         x_t = x_t.view(-1, 1)
         K_, piv_, index_ = [torch.as_tensor(t, dtype=torch.float64) for t in (K_, piv_, index_)]
         res = torch.div(x_t, piv_)
@@ -84,7 +84,7 @@ class FastPowerlawPyTorch(Function1D, metaclass=FunctionMeta):
         if unit_ == 1.0:
             return np.asarray(res.view(-1))
         else:
-            np.asarray(res.view(-1)) * unit_
+            return np.asarray(res.view(-1)) * unit_
 
 
 
@@ -139,10 +139,10 @@ class FastGaussianPyTorch(Function1D, metaclass=FunctionMeta):
 
     
     def evaluate(self, x, F, mu, sigma):
-        device = "cpu"
+        
         
         norm = self.__norm_const / sigma
-        x = torch.as_tensor(x, dtype=torch.float64, device=device)
-        mu = torch.as_tensor(mu, dtype=torch.float64, device=device)
+        x = torch.as_tensor(x, dtype=torch.float64)
+        mu = torch.as_tensor(mu, dtype=torch.float64)
         sigma = torch.as_tensor(sigma, dtype=torch.float64)
         return F * norm * torch.exp(-torch.pow(x - mu, 2.0) / (2 * torch.pow(sigma, 2.0)))
