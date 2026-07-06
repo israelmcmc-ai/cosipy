@@ -80,9 +80,9 @@ class FastPowerlawPyTorch(Function1D, metaclass=FunctionMeta):
             K_, piv_, index_ = K, piv, index
             unit_ = 1.0
 
-        x_t = torch.as_tensor(x_, dtype=torch.float64, devices=self.devices)
+        x_t = torch.as_tensor(x_, dtype=torch.float64, device=self.devices)
         x_t = x_t.view(-1, 1)
-        K_, piv_, index_ = [torch.as_tensor(t, dtype=torch.float64, devices=self.devices) for t in (K_, piv_, index_)]
+        K_, piv_, index_ = [torch.as_tensor(t, dtype=torch.float64, device=self.devices) for t in (K_, piv_, index_)]
         res = torch.div(x_t, piv_)
         res.pow_(index_)
         res.mul_(K_)
@@ -126,6 +126,9 @@ class FastGaussianPyTorch(Function1D, metaclass=FunctionMeta):
         - { x : -1.0, function value: 0.24197072451914337, tolerance: 1e-9}
 
     """
+    #Place this here to avoid recomputing it all the time
+    __norm_const = 1.0 / np.sqrt(2 * np.pi)
+    
     def __init__(self, *args, devices="cpu", **kwargs):
         
         
@@ -134,9 +137,7 @@ class FastGaussianPyTorch(Function1D, metaclass=FunctionMeta):
         super().__init__(*args, **kwargs)
 
     
-        #Place this here to avoid recomputing it all the time
-
-        __norm_const = 1.0 / np.sqrt(2 * np.pi)
+        
 
     def _set_units(self, x_unit, y_unit):
 
@@ -155,9 +156,9 @@ class FastGaussianPyTorch(Function1D, metaclass=FunctionMeta):
         
         
         norm = self.__norm_const / sigma
-        x = torch.as_tensor(x, dtype=torch.float64, devices=self.devices)
-        mu = torch.as_tensor(mu, dtype=torch.float64, devices=self.devices)
-        sigma = torch.as_tensor(sigma, dtype=torch.float64, devices=self.devices)
+        x = torch.as_tensor(x, dtype=torch.float64, device=self.devices)
+        mu = torch.as_tensor(mu, dtype=torch.float64, device=self.devices)
+        sigma = torch.as_tensor(sigma, dtype=torch.float64, device=self.devices)
 
         result = F * norm * torch.exp(-torch.pow(x - mu, 2.0) / (2 * torch.pow(sigma, 2.0)))
         
