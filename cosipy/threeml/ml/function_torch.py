@@ -14,7 +14,7 @@ import astropy.units as astropy_units
 import logging
 logger = logging.getLogger(__name__)
 
-class FastPowerlawPyTorch(Function1D, metaclass=FunctionMeta):
+class FastPowerlawPyTorch(Function1D, metaclass=FunctionMeta, devices="cpu"):
     r"""
     description :
 
@@ -74,21 +74,21 @@ class FastPowerlawPyTorch(Function1D, metaclass=FunctionMeta):
             K_, piv_, index_ = K, piv, index
             unit_ = 1.0
 
-        x_t = torch.as_tensor(x_, dtype=torch.float64)
+        x_t = torch.as_tensor(x_, dtype=torch.float64, devices=devices)
         x_t = x_t.view(-1, 1)
-        K_, piv_, index_ = [torch.as_tensor(t, dtype=torch.float64) for t in (K_, piv_, index_)]
+        K_, piv_, index_ = [torch.as_tensor(t, dtype=torch.float64, devices=devices) for t in (K_, piv_, index_)]
         res = torch.div(x_t, piv_)
         res.pow_(index_)
         res.mul_(K_)
         
         if unit_ == 1.0:
-            return np.asarray(res.view(-1))
+            return res.cpu().numpy()
         else:
-            return np.asarray(res.view(-1)) * unit_
+            return res.cpu().numpy() * unit_
 
 
 
-class FastGaussianPyTorch(Function1D, metaclass=FunctionMeta):
+class FastGaussianPyTorch(Function1D, metaclass=FunctionMeta, devices="cpu"):
     r"""
     description :
 
@@ -142,7 +142,10 @@ class FastGaussianPyTorch(Function1D, metaclass=FunctionMeta):
         
         
         norm = self.__norm_const / sigma
-        x = torch.as_tensor(x, dtype=torch.float64)
-        mu = torch.as_tensor(mu, dtype=torch.float64)
-        sigma = torch.as_tensor(sigma, dtype=torch.float64)
-        return F * norm * torch.exp(-torch.pow(x - mu, 2.0) / (2 * torch.pow(sigma, 2.0)))
+        x = torch.as_tensor(x, dtype=torch.float64, devices=devices)
+        mu = torch.as_tensor(mu, dtype=torch.float64, devices=devices)
+        sigma = torch.as_tensor(sigma, dtype=torch.float64, devices=devices)
+
+        result = F * norm * torch.exp(-torch.pow(x - mu, 2.0) / (2 * torch.pow(sigma, 2.0)))
+        
+        return result.cpu().numpy()
