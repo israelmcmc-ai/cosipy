@@ -46,11 +46,12 @@ class FastPowerlawPyTorch(Function1D, metaclass=FunctionMeta):
             initial value : -2.01
             min : -10
             max : 10
+      
+      properties:
+        devices:
+            desc: devices used by torch
+            initial value: cpu
     """
-    def __init__(self, *args, devices="cpu", **kwargs):
-        
-        super().__init__(*args, **kwargs)
-        object.__setattr__(self, "devices", devices)
     
     def _set_units(self, x_unit, y_unit):
         self.index.unit = astropy_units.dimensionless_unscaled
@@ -118,7 +119,11 @@ class FastGaussianPyTorch(Function1D, metaclass=FunctionMeta):
             desc : standard deviation
             initial value : 1.0
             min : 1e-12
-
+    
+    properties:
+        devices:
+            desc: devices used by torch
+            initial value: cpu
     tests :
         - { x : 0.0, function value: 0.3989422804014327, tolerance: 1e-10}
         - { x : -1.0, function value: 0.24197072451914337, tolerance: 1e-9}
@@ -126,15 +131,6 @@ class FastGaussianPyTorch(Function1D, metaclass=FunctionMeta):
     """
     #Place this here to avoid recomputing it all the time
     __norm_const = 1.0 / np.sqrt(2 * np.pi)
-    
-    def __init__(self, *args, devices="cpu", **kwargs):
-        
-        super().__init__(*args, **kwargs)
-        object.__setattr__(self, "devices", devices)
-        
-
-    
-        
 
     def _set_units(self, x_unit, y_unit):
 
