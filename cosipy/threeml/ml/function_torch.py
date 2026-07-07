@@ -49,10 +49,8 @@ class FastPowerlawPyTorch(Function1D, metaclass=FunctionMeta):
     """
     def __init__(self, *args, devices="cpu", **kwargs):
         
-        
-        self.devices = devices
-        
         super().__init__(*args, **kwargs)
+        object.__setattr__(self, "devices", devices)
     
     def _set_units(self, x_unit, y_unit):
         self.index.unit = astropy_units.dimensionless_unscaled
@@ -131,10 +129,9 @@ class FastGaussianPyTorch(Function1D, metaclass=FunctionMeta):
     
     def __init__(self, *args, devices="cpu", **kwargs):
         
-        
-        self.devices = devices
-        
         super().__init__(*args, **kwargs)
+        object.__setattr__(self, "devices", devices)
+        
 
     
         
