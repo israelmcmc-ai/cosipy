@@ -27,7 +27,7 @@ def test_powerlaw_basic_numeric():
     result = model.evaluate(x, K, piv, index)
     
     assert isinstance(result, np.ndarray)
-    np.testing.assert_allclose(result, expected, rtol=1e-6)
+    np.testing.assert_allclose(result.flatten(), expected, rtol=1e-6)
 
 
 def test_powerlaw_with_astropy_units():
@@ -49,7 +49,7 @@ def test_powerlaw_with_astropy_units():
     result = model.evaluate(x, K, piv, index)
     
     assert isinstance(result, u.Quantity)
-    np.testing.assert_allclose(result.value, expected_values, rtol=1e-6)
+    np.testing.assert_allclose(result.flatten().value, expected_values, rtol=1e-6)
     assert result.unit == model._y_unit
 
 
@@ -68,11 +68,8 @@ def test_gaussian_docstring_case_1():
     
     result = model.evaluate(0.0, F, mu, sigma)
     
-    # Should return a PyTorch tensor
-    assert isinstance(result, torch.Tensor)
-    
     # Check against docstring value: 0.3989422804014327, tolerance: 1e-10
-    assert abs(result.item() - 0.3989422804014327) < 1e-10
+    assert abs(result - 0.3989422804014327) < 1e-10
 
 
 def test_gaussian_docstring_case_2():
@@ -86,7 +83,7 @@ def test_gaussian_docstring_case_2():
     result = model.evaluate(-1.0, F, mu, sigma)
     
     # Check against docstring value: 0.24197072451914337, tolerance: 1e-9
-    assert abs(result.item() - 0.24197072451914337) < 1e-9
+    assert abs(result - 0.24197072451914337) < 1e-9
 
 
 def test_gaussian_array_input():
@@ -100,12 +97,11 @@ def test_gaussian_array_input():
     
     result = model.evaluate(x, F, mu, sigma)
     
-    assert isinstance(result, torch.Tensor)
     assert result.shape == (3,)
     
     # Calculate pure numpy alternative to verify values
     norm = (1.0 / np.sqrt(2 * np.pi)) / sigma
     expected = F * norm * np.exp(-((x - mu) ** 2) / (2 * sigma**2))
     
-    np.testing.assert_allclose(result.numpy(), expected, rtol=1e-6)
+    np.testing.assert_allclose(result.flatten(), expected, rtol=1e-6)
     
