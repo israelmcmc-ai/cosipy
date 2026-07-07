@@ -47,7 +47,7 @@ class FastPowerlawPyTorch(Function1D, metaclass=FunctionMeta):
             min : -10
             max : 10
       
-      properties:
+    properties:
         devices:
             desc: devices used by torch
             initial value: cpu
