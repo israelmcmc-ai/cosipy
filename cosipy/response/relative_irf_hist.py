@@ -29,7 +29,6 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
 
     def __init__(self,
                  irf: Histogram,
-                 pol_convention,
                  copy = True,
                  batch_size=100000):
 
@@ -64,14 +63,14 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
             raise ValueError("IRF Zeta axis is expected to be of PolarizationAxis type")
 
         # Standardize units
-        axes['Ei'] = Axis(axes['Ei'].edges.to(u.keV))
-        axes['Epsilon'] = Axis(axes['Epsilon'].edges.to(''))
-        axes['Phi'] = Axis(axes['Phi'].edges.to(u.rad))
-        axes['Theta'] = Axis(axes['Theta'].edges.to(u.rad))
+        axes['Ei'] = axes['Ei'].to(u.keV, copy = False).to(None, update = False, copy = False)
+        axes['Epsilon'] = axes['Epsilon'].to(None, update = False, copy = False)
+        axes['Phi'] = axes['Phi'].to(u.rad, copy = False).to(None, update = False, copy = False)
+        axes['Theta'] = axes['Theta'].to(u.rad, copy = False).to(None, update = False, copy = False)
         self._pol_convention = axes['Zeta'].convention
-        axes['Zeta'] = Axis(axes['Zeta'].edges.angle.to(u.rad))
+        axes['Zeta'] = Axis(axes['Zeta'].edges.angle.to(u.rad).value, label = 'Zeta')
 
-        irf = irf.to(u.cm * u.cm, copy=False).to(copy=False, update=False)
+        irf = irf.to(u.cm * u.cm, copy=False).to(None, copy=False, update=False) # To cm2 and remove units
 
         # Get the total effective area
         self._tot_aeff = irf.project('NuLambda','Ei') # cm^2
@@ -132,8 +131,7 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
 
         photon_dir, photon_energy_keV = self._photon_list_to_raw_values(photons)
 
-        return self._tot_aeff.interp({'NuLambda': photon_dir,
-                                      'Ei': photon_energy_keV})
+        return self._tot_aeff.interp(photon_dir, photon_energy_keV)
 
     @staticmethod
     def _photon_list_to_raw_values(photons:PhotonListWithDirectionAndEnergyInSCFrameInterface):
