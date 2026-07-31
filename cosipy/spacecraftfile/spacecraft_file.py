@@ -337,18 +337,9 @@ class SpacecraftHistory:
         #Convert EVERY column to native byte order ---
         for colname in t.colnames:
             col = t[colname]
-            # Check if the column has a unit attached
-            if hasattr(col, 'unit') and col.unit is not None:
-                unit = col.unit
-                # 1. Extract raw numpy array via .value
-                # 2. Make it contiguous & native endian
-                # 3. Re-wrap with original unit
-                native_array = np.astype(col, col.dtype.newbyteorder('='), copy=False)
-                t[colname] = u.Quantity(native_array, unit=unit)
+            t[colname] = np.astype(col, col.dtype.newbyteorder('='), copy=False)
         
-            # Handle plain numpy columns (no units)
-            elif isinstance(col, np.ndarray):
-                t[colname] = np.astype(col, col.dtype.newbyteorder('='), copy=False)
+            
         
         # make sure we have version info, and that we support this version
         if "VERSION" not in t.meta:
