@@ -62,7 +62,7 @@ class FastPowerlawPyTorch(Function1D, metaclass=FunctionMeta):
         # The normalization has the same units as the y
 
         self.K.unit = y_unit
-        
+        self._y_unit = y_unit
     
     def evaluate(self, x, K, piv, index):
         
@@ -74,7 +74,7 @@ class FastPowerlawPyTorch(Function1D, metaclass=FunctionMeta):
 
         if isinstance(K, astropy_units.Quantity):
             K_, piv_, index_ = K.value, piv.value, index.value
-            unit_ = self.K.unit
+            unit_ = self.y_unit
         else:
             K_, piv_, index_ = K, piv, index
             unit_ = 1.0
@@ -218,7 +218,7 @@ class FastCutoffPowerlawPyTorch(Function1D, metaclass=FunctionMeta):
         # The normalization has the same units as the y
 
         self.K.unit = y_unit
-        
+        self._y_unit = y_unit
         
     # noinspectionq PyPep8Naming
     def evaluate(self, x, K, piv, index, xc):
@@ -230,7 +230,7 @@ class FastCutoffPowerlawPyTorch(Function1D, metaclass=FunctionMeta):
             xc_ = xc.value
             x_ = x.value
 
-            unit_ = self.K.unit
+            unit_ = self.y_unit
 
         else:
             unit_ = 1.0
