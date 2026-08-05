@@ -30,7 +30,7 @@ def test_powerlaw_basic_numeric():
     np.testing.assert_allclose(result.flatten(), expected, rtol=1e-6)
 
 
-def test_powerlaw_with_u():
+def test_powerlaw_with_astropy_units():
     """Test Powerlaw when parameters and inputs are passed as Astropy Quantities."""
     model = FastPowerlawPyTorch()
     
