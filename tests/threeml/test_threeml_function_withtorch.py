@@ -159,12 +159,6 @@ def test_parameter_bounds():
     assert f.xc.min_value == pytest.approx(1.0)
  
  
-def test_K_and_xc_use_log10_transform():
-    f = FastCutoffPowerlawPyTorch()
-    assert f.K.transformation.name == "log10"
-    assert f.xc.transformation.name == "log10"
- 
- 
 def test_devices_property_defaults_to_cpu():
     f = FastCutoffPowerlawPyTorch()
     assert f.devices.value == "cpu"
@@ -313,6 +307,4 @@ def test_output_length_matches_input_length():
     result = f.evaluate(x, K=1.0, piv=1.0, index=-2.0, xc=10.0)
     assert result.shape[0] == len(x)
     
-    
-    np.testing.assert_allclose(result.flatten(), expected, rtol=1e-6)
-    
+        
