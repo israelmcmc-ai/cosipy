@@ -174,7 +174,7 @@ def test_set_units_assigns_expected_units():
     x_unit = u.keV
     y_unit = 1 / (u.keV * u.cm ** 2 * u.s)
  
-    f._set_units(x_unit, y_unit)
+    f.set_units(x_unit, y_unit)
  
     assert f.index.unit == u.dimensionless_unscaled
     assert f.piv.unit == x_unit
