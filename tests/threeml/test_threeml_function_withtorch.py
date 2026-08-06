@@ -224,6 +224,10 @@ def test_evaluate_no_units_applied_when_plain_input():
  
 def test_evaluate_with_quantity_input_returns_quantity():
     f = make_function(K=1.0, piv=1.0, index=-2.0, xc=10.0)
+    f.set_units(
+        u.keV,
+        1 / (u.keV * u.cm ** 2 * u.s),
+    )
     f._set_units(
         u.keV,
         1 / (u.keV * u.cm ** 2 * u.s),
