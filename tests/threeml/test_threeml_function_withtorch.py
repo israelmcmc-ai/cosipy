@@ -244,6 +244,10 @@ def test_evaluate_with_quantity_input_returns_quantity():
  
 def test_evaluate_quantity_matches_plain_evaluation_numerically():
     f = make_function(K=3.0, piv=2.0, index=-1.5, xc=7.0)
+    f.set_units(
+        u.keV,
+        1 / (u.keV * u.cm ** 2 * u.s),
+    )
     f._set_units(
         u.keV,
         1 / (u.keV * u.cm ** 2 * u.s),
