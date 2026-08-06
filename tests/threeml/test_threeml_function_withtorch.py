@@ -228,11 +228,7 @@ def test_evaluate_with_quantity_input_returns_quantity():
         u.keV,
         1 / (u.keV * u.cm ** 2 * u.s),
     )
-    f._set_units(
-        u.keV,
-        1 / (u.keV * u.cm ** 2 * u.s),
-    )
- 
+
     x = np.array([1.0, 2.0, 5.0]) * u.keV
     result = f.evaluate(
         x,
@@ -252,10 +248,7 @@ def test_evaluate_quantity_matches_plain_evaluation_numerically():
         u.keV,
         1 / (u.keV * u.cm ** 2 * u.s),
     )
-    f._set_units(
-        u.keV,
-        1 / (u.keV * u.cm ** 2 * u.s),
-    )
+    
  
     x_val = np.array([1.0, 3.0, 6.0])
     x_q = x_val * u.keV
