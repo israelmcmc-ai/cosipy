@@ -34,12 +34,13 @@ def test_powerlaw_with_astropy_units():
     """Test Powerlaw when parameters and inputs are passed as Astropy Quantities."""
     model = FastPowerlawPyTorch()
     
-    # Manually mimic what astromodels sets up behind the scenes for units
-    model._y_unit = u.erg / (u.cm**2 * u.s * u.keV)
-    model._x_unit = u.keV
+    model.set_units(
+        u.keV,
+        1 / (u.keV * u.cm ** 2 * u.s),
+    )
     
     x = np.array([10.0, 20.0]) * u.keV
-    K = 3.0 * model._y_unit
+    K = 3.0 * model.y_unit
     piv = 10.0 * u.keV
     index = -2.0 * u.dimensionless_unscaled
     
@@ -50,7 +51,7 @@ def test_powerlaw_with_astropy_units():
     
     assert isinstance(result, u.Quantity)
     np.testing.assert_allclose(result.flatten().value, expected_values, rtol=1e-6)
-    assert result.unit == model._y_unit
+    assert result.unit == model.y_unit
 
 
 # ==========================================
