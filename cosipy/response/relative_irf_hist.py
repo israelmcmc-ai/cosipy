@@ -51,7 +51,7 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
             raise ValueError("Ei axis is expected to have units of energy.")
 
         if not axes['Epsilon'].unit.is_equivalent(''):
-            raise ValueError("Ei axis is expected to be unitless")
+            raise ValueError("Epsilon axis is expected to be unitless")
 
         if not axes['Phi'].unit.is_equivalent('deg'):
             raise ValueError("Phi axis is expected to have units of angle.")
