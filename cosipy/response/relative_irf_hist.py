@@ -159,15 +159,15 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
         phase_space_cds = RelativeCDSCoordinates.get_relative_cds_phase_space(phi_edges_mesh[:-1, :-1, :-1],
                                                                               phi_edges_mesh[1:, :-1, :-1],
                                                                               arm_edges_mesh[:-1, :-1, :-1],
-                                                                              arm_edges_mesh[:-1, 1:, :-1:],
+                                                                              arm_edges_mesh[:-1, 1:, :-1],
                                                                               az_edges_mesh[:-1, :-1, :-1],
                                                                               az_edges_mesh[:-1, :-1, 1:])
 
-        ei_centers_mesh, em_widths_mesh = np.meshgrid(axes['Ei'].centers,
+        ei_centers_mesh, epsilon_widths_mesh = np.meshgrid(axes['Ei'].centers,
                                                       axes['Epsilon'].widths,
                                                       indexing='ij')
 
-        phase_space_em = ei_centers_mesh * em_widths_mesh
+        phase_space_em = ei_centers_mesh * epsilon_widths_mesh
 
         irf /= axes.expand_dims(phase_space_cds, axes.label_to_index(['Phi', 'Theta', 'Zeta']))
         irf /= axes.expand_dims(phase_space_em, axes.label_to_index(['Ei', 'Epsilon']))
