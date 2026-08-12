@@ -23,6 +23,57 @@ from cosipy.util.iterables import asarray
 
 
 class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInterface):
+    """
+    Histogram-based far-field instrument response function parametrized in
+    coordinates relative to the photon and linearly interpolated.
+
+    The response is stored as a 6-dimensional :class:`histpy.Histogram`
+    with axes, in order:
+
+    - ``NuLambda`` (:class:`histpy.HealpixAxis`): incoming photon
+      direction in the spacecraft frame.
+    - ``Ei`` (:class:`histpy.Axis`, units of energy): true incident
+      photon energy.
+    - ``Epsilon`` (:class:`histpy.Axis`, unitless): fractional energy
+      deviation ``(Em - Ei) / Ei`` between the measured energy ``Em``
+      and the true energy ``Ei``.
+    - ``Phi`` (:class:`histpy.Axis`, units of angle): Compton
+      kinematics-derived scattering angle.
+    - ``Theta`` (:class:`histpy.Axis`, units of angle): offset of the
+      geometric scattering angle (NuLambda to PsiChi) relative to the kinematic one
+      (``Theta = phi_geo - phi_kin``).
+    - ``Zeta`` (:class:`cosipy.polarization.PolarizationAxis`):
+      azimuthal angle of the scattered photon around the source
+      direction, referenced to the polarization convention stored in
+      the axis.
+
+    On construction the input histogram is validated, its axis units
+    are standardized (energies to keV, angles to radians, contents to
+    cm^2) and then divided by the phase-space volume of each bin to
+    produce a differential effective area with implicit units of
+    ``cm^2 / sr / rad / keV``. The polarization convention carried by
+    the ``Zeta`` axis is preserved as :attr:`_pol_convention` so it
+    can be re-applied when translating event directions into the
+    relative coordinate system.
+
+    This class is labelled "Unpolarized" because it does not model a
+    dependence of the response on the incident photon polarization
+    angle; the ``Zeta`` axis is used purely as the scattered-photon
+    azimuth, not as a polarization-input degree of freedom.
+
+    Parameters
+    ----------
+    irf : histpy.Histogram
+        A 6D histogram with the axes described above and contents in
+        units equivalent to area (``cm^2``).
+    copy : bool, optional
+        If True (default) the input histogram is copied before its
+        axes and contents are modified in place. Set to False to
+        avoid the copy when the caller no longer needs the original.
+    batch_size : int, optional
+        Number of events to process per batch when the response is
+        evaluated on large event lists. Defaults to ``100000``.
+    """
 
     event_data_type = EmCDSEventDataInSCFrameInterface
     photon_list_type = PhotonListWithDirectionAndEnergyInSCFrameInterface
@@ -31,6 +82,30 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
                  irf: Histogram,
                  copy = True,
                  batch_size=100000):
+        """
+        Validate the input histogram, standardize its axis units, and
+        pre-compute the total and differential effective area used at
+        evaluation time.
+
+        See the class docstring for a description of the expected axes
+        and units.
+
+        Parameters
+        ----------
+        irf : histpy.Histogram
+            Input response histogram.
+        copy : bool, optional
+            Whether to copy ``irf`` before modifying it.
+        batch_size : int, optional
+            Event batch size used by downstream evaluators.
+
+        Raises
+        ------
+        ValueError
+            If the histogram contents are not area-equivalent, the
+            axis labels do not match the expected sequence, or an
+            axis has an unexpected type or units.
+        """
 
         if copy:
             irf = irf.copy()
@@ -105,28 +180,43 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
     @classmethod
     def from_h5(cls, filename, *args, **kwargs):
         """
+        Construct an :class:`IRFRelativeHistUnpolarized` from an HDF5
+        file that stores the response histogram under the group
+        ``"IRF"``.
 
         Parameters
         ----------
-        filename
+        filename : str or path-like
+            Path to the HDF5 file containing the response histogram.
+        *args, **kwargs
+            Extra arguments forwarded verbatim to
+            :meth:`__init__` (e.g. ``copy`` or ``batch_size``).
 
         Returns
         -------
-
+        IRFRelativeHistUnpolarized
+            Initialized instance with the histogram loaded from disk.
         """
 
         return cls(Histogram.open(filename, "IRF"), *args, **kwargs)
 
     def _effective_area_cm2(self, photons: PhotonListWithDirectionAndEnergyInSCFrameInterface) -> Iterable[float]:
         """
+        Total effective area, in cm^2, for each incident photon.
+
+        Interpolates the ``NuLambda``/``Ei`` projection of the full
+        response at the direction and energy of each photon in the
+        list.
 
         Parameters
         ----------
-        photons
+        photons : PhotonListWithDirectionAndEnergyInSCFrameInterface
+            Photons to evaluate the effective area on.
 
         Returns
         -------
-
+        Iterable[float]
+            One effective-area value per photon, in cm^2.
         """
 
         photon_dir, photon_energy_keV = self._photon_list_to_raw_values(photons)
@@ -135,6 +225,23 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
 
     @staticmethod
     def _photon_list_to_raw_values(photons:PhotonListWithDirectionAndEnergyInSCFrameInterface):
+        """
+        Extract the raw arrays required to evaluate the response from
+        a photon list.
+
+        Parameters
+        ----------
+        photons : PhotonListWithDirectionAndEnergyInSCFrameInterface
+            Photon list providing spacecraft-frame directions and
+            energies.
+
+        Returns
+        -------
+        photon_dir : astropy.coordinates.UnitSphericalRepresentation
+            Photon directions in the spacecraft frame.
+        photon_energy_keV : numpy.ndarray
+            Photon energies in keV, as a float array.
+        """
 
         photon_lon_rad = asarray(photons.direction_lon_rad_sc, float)
         photon_lat_rad = asarray(photons.direction_lat_rad_sc, float)
@@ -148,14 +255,39 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
 
     def _differential_effective_area_cm2(self, photons:PhotonListWithDirectionAndEnergyInSCFrameInterface, events: EmCDSEventDataInSCFrameInterface) -> Iterable[float]:
         """
+        Differential effective area, in cm^2 per unit phase-space
+        for each (photon, event) pair.
+
+        For each pair the incident photon direction and energy are
+        combined with the event's scattered direction, kinematic
+        scattering angle and measured energy to build the six
+        relative-coordinate arguments consumed by the underlying
+        differential-area histogram:
+
+        - ``NuLambda`` : photon direction in the spacecraft frame,
+        - ``Ei`` : true photon energy in keV,
+        - ``Epsilon`` : fractional energy deviation
+          ``(Em - Ei) / Ei``,
+        - ``Phi`` : kinematics-derived scattering angle in radians,
+        - ``Theta`` : difference between the geometric and kinematic
+          scattering angles in radians,
+        - ``Zeta`` : azimuthal scattered-photon angle around the
+          source direction, in radians, expressed in the stored
+          polarization convention.
 
         Parameters
         ----------
-        query
+        photons : PhotonListWithDirectionAndEnergyInSCFrameInterface
+            True photon directions and energies, one per event.
+        events : EmCDSEventDataInSCFrameInterface
+            Reconstructed events providing the scattered direction,
+            kinematics-derived scattering angle, and measured energy.
 
         Returns
         -------
-
+        Iterable[float]
+            Differential effective area interpolated at each
+            (photon, event) pair, in ``cm^2 / sr / rad / keV``.
         """
 
         photon_dir, photon_energy_keV = self._photon_list_to_raw_values(photons)
@@ -190,6 +322,9 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
 
     def _random_events(self, photons: PhotonListWithDirectionInSCFrameInterface) -> EventDataInterface:
         """
+        Not implemented yet; provided to satisfy the
+        :class:`FarFieldSpectralInstrumentResponseFunctionInterface`
+        contract.
         """
         raise NotImplementedError("random_events not implemented yet.")
 
