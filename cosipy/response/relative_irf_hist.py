@@ -244,7 +244,10 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
         """
 
         photon_lon_rad = asarray(photons.direction_lon_rad_sc, float)
-        photon_lat_rad = asarray(photons.direction_lat_rad_sc, float)
+        # Clip away floating-point overshoot past the poles (e.g. from
+        # float32 downcasting upstream), which Latitude validates strictly
+        # against.
+        photon_lat_rad = np.clip(asarray(photons.direction_lat_rad_sc, float), -np.pi / 2, np.pi / 2)
 
         photon_dir = UnitSphericalRepresentation(lon=Quantity(photon_lon_rad, 'rad', copy=False),
                                                  lat=Quantity(photon_lat_rad, 'rad', copy=False))
@@ -293,7 +296,10 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
         photon_dir, photon_energy_keV = self._photon_list_to_raw_values(photons)
 
         psichi_lon_rad = asarray(events.scattered_lon_rad_sc, float)
-        psichi_lat_rad = asarray(events.scattered_lat_rad_sc, float)
+
+        # Clip away values outside the range due to floating-point errors since
+        # UnitSphericalRepresentation validates strictly
+        psichi_lat_rad = np.clip(asarray(events.scattered_lat_rad_sc, float), -np.pi / 2, np.pi / 2)
 
         psichi_dir = UnitSphericalRepresentation(lon = Quantity(psichi_lon_rad, 'rad', copy = False),
                                                  lat = Quantity(psichi_lat_rad, 'rad', copy = False))
