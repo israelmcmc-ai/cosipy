@@ -364,7 +364,7 @@ def test_parameter_bounds():
     assert f.index.max_value == pytest.approx(10)
     assert f.xc.min_value == pytest.approx(1.0)
     assert f.gamma.min_value == pytest.approx(0.1)
-    assert f.gamma.min_value == pytest.approx(10.0)
+    assert f.gamma.max_value == pytest.approx(10.0)
 
 def test_devices_property_defaults_to_cpu():
     f = FastSuperCutoffPowerlawPyTorch()
