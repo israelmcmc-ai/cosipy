@@ -345,7 +345,7 @@ def test_default_parameter_values():
     assert pytest.approx(f.piv.value) == 1.0
     assert pytest.approx(f.index.value) == -2.0
     assert pytest.approx(f.xc.value) == 10.0
-    assert pytest.approx(f.gamma.value) == 2.0
+    assert pytest.approx(f.gamma.value) == 1.0
  
 def test_piv_is_fixed_by_default():
     f = FastSuperCutoffPowerlawPyTorch()
@@ -359,13 +359,13 @@ def test_K_is_normalization():
  
 def test_parameter_bounds():
     f = FastSuperCutoffPowerlawPyTorch()
-    assert f.K.min_value == pytest.approx(1e-30)
-    assert f.K.max_value == pytest.approx(1e3)
+    assert f.K.min_value == pytest.approx(1e-50)
     assert f.index.min_value == pytest.approx(-10)
     assert f.index.max_value == pytest.approx(10)
     assert f.xc.min_value == pytest.approx(1.0)
     assert f.gamma.min_value == pytest.approx(0.1)
- 
+    assert f.gamma.min_value == pytest.approx(10.0)
+
 def test_devices_property_defaults_to_cpu():
     f = FastSuperCutoffPowerlawPyTorch()
     assert f.devices.value == "cpu"
@@ -468,7 +468,7 @@ def test_evaluate_quantity_matches_plain_evaluation_numerically():
         piv=f.piv.as_quantity,
         index=f.index.as_quantity,
         xc=f.xc.as_quantity,
-        gammac=f.gamma.as_quantity
+        gamma=f.gamma.as_quantity
     )
  
     np.testing.assert_allclose(
