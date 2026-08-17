@@ -312,12 +312,12 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
 
         theta_rad = phi_geo_rad - phi_kin_rad
 
-        return self._diff_aeff.interp({'NuLambda': photon_dir,
-                                       'Ei': photon_energy_keV,
-                                       'Epsilon': epsilon,
-                                       'Phi': phi_kin_rad,
-                                       'Theta': theta_rad,
-                                       'Zeta': zeta_rad})
+        return self._diff_aeff.interp(photon_dir,
+                                       photon_energy_keV,
+                                       epsilon,
+                                       phi_kin_rad,
+                                       theta_rad,
+                                       zeta_rad)
 
 
     def _random_events(self, photons: PhotonListWithDirectionInSCFrameInterface) -> EventDataInterface:
