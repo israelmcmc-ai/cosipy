@@ -4,7 +4,7 @@ import cosipy
 if not cosipy.with_ml:
     pytest.skip(reason="Optional [ml] dependencies not installed", allow_module_level=True) 
 
-from cosipy.threeml.ml.function_torch import FastPowerlawPyTorch, FastGaussianPyTorch, FastCutoffPowerlawPyTorch
+from cosipy.threeml.ml.function_torch import FastPowerlawPyTorch, FastGaussianPyTorch, FastCutoffPowerlawPyTorch, FastSuperCutoffPowerlawPyTorch
 import astropy.units as u
 import numpy as np
 import torch 
