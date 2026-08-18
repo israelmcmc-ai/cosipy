@@ -149,12 +149,11 @@ class FastGaussianPyTorch(Function1D, metaclass=FunctionMeta):
         
         
         norm = self.__norm_const / sigma
-        x_t = torch.as_tensor(x, dtype=torch.float64, device=self.devices.value)
-        x_t = x_t.view(-1, 1)
+        x = torch.as_tensor(x, dtype=torch.float64, device=self.devices.value)
         mu = torch.as_tensor(mu, dtype=torch.float64, device=self.devices.value)
         sigma = torch.as_tensor(sigma, dtype=torch.float64, device=self.devices.value)
 
-        result = F * norm * torch.exp(-torch.pow(x_t - mu, 2.0) / (2 * torch.pow(sigma, 2.0)))
+        result = F * norm * torch.exp(-torch.pow(x - mu, 2.0) / (2 * torch.pow(sigma, 2.0)))
         
         return result.cpu().numpy()
 
