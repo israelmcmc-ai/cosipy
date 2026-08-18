@@ -149,11 +149,12 @@ class FastGaussianPyTorch(Function1D, metaclass=FunctionMeta):
         
         
         norm = self.__norm_const / sigma
-        x = torch.as_tensor(x, dtype=torch.float64, device=self.devices.value)
+        x_t = torch.as_tensor(x, dtype=torch.float64, device=self.devices.value)
+        x_t = x_t.view(-1, 1)
         mu = torch.as_tensor(mu, dtype=torch.float64, device=self.devices.value)
         sigma = torch.as_tensor(sigma, dtype=torch.float64, device=self.devices.value)
 
-        result = F * norm * torch.exp(-torch.pow(x - mu, 2.0) / (2 * torch.pow(sigma, 2.0)))
+        result = F * norm * torch.exp(-torch.pow(x_t - mu, 2.0) / (2 * torch.pow(sigma, 2.0)))
         
         return result.cpu().numpy()
 
@@ -335,9 +336,8 @@ class FastSuperCutoffPowerlawPyTorch(Function1D, metaclass=FunctionMeta):
         x_t = torch.as_tensor(x_, dtype=torch.float64, device=self.devices.value)
         x_t = x_t.view(-1, 1)
         K_, piv_, index_, xc_, gamma_ = [torch.as_tensor(t, dtype=torch.float64, device=self.devices.value) for t in (K_, piv_, index_, xc_, gamma_)]
-        res = torch.div(x_t, piv_)
-        res.pow_(index_)
+        
+        res = torch.exp( index_ * torch.log(x_t / piv_) - torch.pow(x_t / xc_, gamma_) )
         res.mul_(K_)
-        res.mul_( torch.pow( torch.exp_(-x_t/xc_), gamma_ ) ) 
         
         return res.cpu().numpy() * unit_
