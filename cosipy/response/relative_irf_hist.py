@@ -186,6 +186,13 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
         irf /= axes.expand_dims(phase_space_cds, axes.label_to_index(['Phi', 'Theta', 'Zeta']))
         irf /= axes.expand_dims(phase_space_em, axes.label_to_index(['Ei', 'Epsilon']))
 
+        # Bins in the unphysical region of the CDS reparametrization (Phi +
+        # Theta outside [0, pi]) have zero phase space and zero contents,
+        # so the divisions above produce 0/0 = NaN there. Replace with the
+        # physically correct value of zero differential effective area, so
+        # these bins don't poison interpolation for nearby physical events.
+        irf[:] = np.nan_to_num(irf.contents, nan = 0.0)
+
         self._diff_aeff = irf
 
         # Extra params
