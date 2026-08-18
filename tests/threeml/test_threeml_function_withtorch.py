@@ -481,7 +481,7 @@ def test_evaluate_quantity_matches_plain_evaluation_numerically():
 def test_value_at_pivot_equals_K_times_cutoff_term():
     f = make_function(K=5.0, piv=2.0, index=-2.0, xc=10.0, gamma=2.0)
     result = f.evaluate(np.array([2.0]), K=5.0, piv=2.0, index=-2.0, xc=10.0, gamma=2.0)
-    expected = 5.0 * np.power(np.exp(-2.0 / 10.0), 2.0)
+    expected = analytic_cutoff_powerlaw(np.array([2.0]), K=5.0, piv=2.0, index=-2.0, xc=10.0, gamma=2.0)
     np.testing.assert_allclose(result.ravel()[0], expected, rtol=1e-6)
  
  
