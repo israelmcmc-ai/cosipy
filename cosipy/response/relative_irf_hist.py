@@ -17,6 +17,8 @@ from cosipy.interfaces.photon_parameters import PhotonWithDirectionAndEnergyInSC
 
 import h5py as h5
 
+from scoords import SpacecraftFrame
+
 from cosipy.polarization import PolarizationAxis
 from cosipy.response.relative_coordinates import RelativeCDSCoordinates
 from cosipy.util.iterables import asarray
@@ -136,6 +138,10 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
 
         if not isinstance(axes['Zeta'], PolarizationAxis):
             raise ValueError("IRF Zeta axis is expected to be of PolarizationAxis type")
+
+        if not isinstance(axes['Zeta'].convention.frame, SpacecraftFrame):
+            raise ValueError("IRF Zeta axis polarization convention must be defined in the spacecraft "
+                              "frame (e.g. MEGAlibRelativeX/Y/Z or StereographicConvention).")
 
         # Standardize units
         axes['Ei'] = axes['Ei'].to(u.keV, copy = False).to(None, update = False, copy = False)
