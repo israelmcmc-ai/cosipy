@@ -330,10 +330,8 @@ def make_function(K=1.0, piv=1.0, index=-2.0, xc=10.0, gamma=2.0):
  
  
 def analytic_cutoff_powerlaw(x, K, piv, index, xc, gamma):
-    return K * np.power(np.asarray(x, dtype=float) / piv, index) * np.power(np.exp(
-        -np.asarray(x, dtype=float) / xc
-    ), gamma)
- 
+    return K * np.exp( index * np.log(x / piv) - np.pow(x / xc, gamma) )
+
  
 # ---------------------------------------------------------------------------
 # Parameter defaults / metadata (from the docstring YAML block)
