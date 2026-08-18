@@ -143,6 +143,14 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
             raise ValueError("IRF Zeta axis polarization convention must be defined in the spacecraft "
                               "frame (e.g. MEGAlibRelativeX/Y/Z or StereographicConvention).")
 
+        # Events are evaluated with Zeta wrapped into [0, 360) deg (see
+        # _differential_effective_area_cm2), so the axis must span exactly
+        # that range for the wrapped values to land on a valid bin.
+        zeta_edges_deg = axes['Zeta'].edges.angle.to_value(u.deg)
+        if not (np.isclose(zeta_edges_deg[0], 0) and np.isclose(zeta_edges_deg[-1], 360)):
+            raise ValueError("IRF Zeta axis is expected to span the full [0, 360) deg range, got "
+                              f"[{zeta_edges_deg[0]}, {zeta_edges_deg[-1]}] deg")
+
         # Standardize units
         axes['Ei'] = axes['Ei'].to(u.keV, copy = False).to(None, update = False, copy = False)
         axes['Epsilon'] = axes['Epsilon'].to(None, update = False, copy = False)
@@ -320,7 +328,13 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
         phi_geo, zeta = relcoords.to_relative(psichi_dir.to_cartesian().xyz)
 
         phi_geo_rad = phi_geo.to_value(u.rad)
-        zeta_rad = zeta.to_value(u.rad)
+
+        # RelativeCDSCoordinates.to_relative() returns az in (-pi, pi], but
+        # the Zeta axis spans [0, 2*pi) and, once converted to a plain
+        # (non-circular) Axis in __init__, clamps rather than wraps
+        # out-of-range values. Wrap into [0, 2*pi) so negative az values
+        # land on their correct bin instead of being clamped to Zeta = 0.
+        zeta_rad = zeta.to_value(u.rad) % (2 * np.pi)
 
         theta_rad = phi_geo_rad - phi_kin_rad
 
