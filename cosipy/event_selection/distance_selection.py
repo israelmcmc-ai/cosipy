@@ -13,23 +13,29 @@ class DistanceSelector(EventSelectorInterface):
 
     event_data_type = TimeTagEmCDSDistanceEventDataInSCFrameInterface
 
-    def __init__(self, distance_min: Quantity = 0 * u.cm, distance_max: Quantity = np.inf * u.cm):
+    def __init__(self, min_distance: Quantity = None, max_distance: Quantity = None):
         """
         Selects events whose distance between the first two hits falls
-        within [distance_min, distance_max).
+        within [min_distance, max_distance).
 
         Parameters
         ----------
-        distance_min: Minimum distance [inclusive]. Default: 0 cm
-        distance_max: Maximum distance [exclusive]. Default: infinity
+        min_distance: Minimum distance [inclusive]. Default: 0 cm
+        max_distance: Maximum distance [exclusive]. Default: infinity
         """
 
-        self._distance_min_cm = distance_min.to_value(u.cm)
-        self._distance_max_cm = distance_max.to_value(u.cm)
+        if min_distance is None:
+            min_distance = 0 * u.cm
+
+        if max_distance is None:
+            max_distance = np.inf * u.cm
+
+        self._min_distance_cm = min_distance.to_value(u.cm)
+        self._max_distance_cm = max_distance.to_value(u.cm)
 
     def _select(self, events: TimeTagEmCDSDistanceEventDataInSCFrameInterface,
                 early_stop: bool = True) -> Iterable[bool]:
 
         distance_cm = asarray(events.distance_cm, dtype=np.float64, force_dtype=False)
 
-        return (distance_cm >= self._distance_min_cm) & (distance_cm < self._distance_max_cm)
+        return (distance_cm >= self._min_distance_cm) & (distance_cm < self._max_distance_cm)

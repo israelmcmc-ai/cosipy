@@ -107,7 +107,7 @@ def test_time_tag_emcds_distance_event_data_selection():
     distance_cm = np.array([0.0, 1.0, 2.0, 3.0, 4.0, 5.0])
     event_id = np.arange(100, 100 + n)
 
-    selector = DistanceSelector(distance_min=1.5 * u.cm, distance_max=4.5 * u.cm)
+    selector = DistanceSelector(min_distance=1.5 * u.cm, max_distance=4.5 * u.cm)
     expected_mask = (distance_cm >= 1.5) & (distance_cm < 4.5)
 
     filtered = TimeTagEmCDSDistanceEventDataInSCFrameFromArrays(

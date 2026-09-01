@@ -31,7 +31,7 @@ def test_distance_selector_default_keeps_everything():
 
 
 def test_distance_selector_bounds():
-    selector = DistanceSelector(distance_min=1. * u.cm, distance_max=4. * u.cm)
+    selector = DistanceSelector(min_distance=1. * u.cm, max_distance=4. * u.cm)
 
     mask = asarray(selector.select(events), dtype=bool)
 
@@ -42,7 +42,7 @@ def test_distance_selector_bounds():
 
 
 def test_distance_selector_min_only():
-    selector = DistanceSelector(distance_min=3. * u.cm)
+    selector = DistanceSelector(min_distance=3. * u.cm)
 
     mask = asarray(selector.select(events), dtype=bool)
 
@@ -52,7 +52,7 @@ def test_distance_selector_min_only():
 
 
 def test_distance_selector_max_only():
-    selector = DistanceSelector(distance_max=3. * u.cm)
+    selector = DistanceSelector(max_distance=3. * u.cm)
 
     mask = asarray(selector.select(events), dtype=bool)
 
@@ -62,7 +62,7 @@ def test_distance_selector_max_only():
 
 
 def test_distance_selector_single_event():
-    selector = DistanceSelector(distance_min=1. * u.cm, distance_max=4. * u.cm)
+    selector = DistanceSelector(min_distance=1. * u.cm, max_distance=4. * u.cm)
 
     inside = TimeTagEmCDSDistanceEventInSCFrame(0., 0., 100., 0.1, 0., 0., distance_cm=2.5, event_id=1)
     outside = TimeTagEmCDSDistanceEventInSCFrame(0., 0., 100., 0.1, 0., 0., distance_cm=10., event_id=2)
