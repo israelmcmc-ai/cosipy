@@ -57,6 +57,17 @@ Two ways to define the target grid are supported (see `__main__` below):
     response can be compared bin-for-bin against a MEGAlib-derived histogram
     response.
   - Building an `Axes` object by hand with custom bin edges.
+
+Total effective area (`aeff`)
+------------------------------
+IRFRelativeHistUnpolarized accepts an optional `aeff` argument: a separate
+2D (NuLambda, Ei) histogram used as the total effective area instead of
+projecting it out of the full 6D histogram. Since the total effective area
+only requires NFResponse.evaluate_effective_area() (no density model calls),
+it is far cheaper to evaluate than the full differential response, and is
+therefore often worth building on its own, finer grid.
+build_relative_hist_aeff() builds that standalone histogram; see the
+USE_SEPARATE_AEFF_GRID / AEFF_ONLY options in `__main__` below.
 """
 
 import logging
@@ -158,6 +169,44 @@ def _phase_space_em(ei_axis: Axis, epsilon_axis: Axis) -> np.ndarray:
         indexing='ij')
 
     return ei_centers_mesh * epsilon_widths_mesh
+
+
+def _evaluate_effective_area_grid(nf_response: NFResponse,
+                                  nulambda_lon_rad: np.ndarray,
+                                  nulambda_colat_rad: np.ndarray,
+                                  ei_centers_keV: np.ndarray,
+                                  grid_batch_size: int) -> np.ndarray:
+    """
+    Evaluate NFResponse.evaluate_effective_area() on the full outer product
+    of a set of NuLambda pixel (lon, colatitude) pairs and Ei bin centers,
+    in grid_batch_size-sized chunks. Shared by build_relative_hist_irf()
+    (Step 1) and build_relative_hist_aeff().
+
+    Returns
+    -------
+    numpy.ndarray
+        Shape (len(nulambda_lon_rad), len(ei_centers_keV)), in cm^2.
+    """
+
+    npix = len(nulambda_lon_rad)
+    nEi = len(ei_centers_keV)
+
+    ipix_grid, iei_grid = np.meshgrid(np.arange(npix), np.arange(nEi), indexing='ij')
+    ipix_flat = ipix_grid.ravel()
+    iei_flat = iei_grid.ravel()
+
+    tot_aeff = np.empty(npix * nEi, dtype=float)
+    for start in range(0, len(ipix_flat), grid_batch_size):
+        end = min(start + grid_batch_size, len(ipix_flat))
+        sl = slice(start, end)
+        context = torch.stack([
+            torch.as_tensor(nulambda_lon_rad[ipix_flat[sl]], dtype=torch.float32),
+            torch.as_tensor(nulambda_colat_rad[ipix_flat[sl]], dtype=torch.float32),
+            torch.as_tensor(ei_centers_keV[iei_flat[sl]], dtype=torch.float32),
+        ], dim=1)
+        tot_aeff[sl] = np.asarray(nf_response.evaluate_effective_area(context))
+
+    return tot_aeff.reshape(npix, nEi)
 
 
 def build_relative_hist_irf(nf_response: NFResponse,
@@ -262,22 +311,13 @@ def build_relative_hist_irf(nf_response: NFResponse,
     try:
         # --- Step 1: total effective area on the (NuLambda, Ei) grid. It
         # only depends on those two axes, so it is evaluated once,
-        # independently of the (Epsilon, Phi, Theta, Zeta) loop below.
-        ipix_grid, iei_grid = np.meshgrid(np.arange(npix), np.arange(nEi), indexing='ij')
-        ipix_flat = ipix_grid.ravel()
-        iei_flat = iei_grid.ravel()
-
-        tot_aeff = np.empty(npix * nEi, dtype=float)
-        for start in range(0, len(ipix_flat), grid_batch_size):
-            end = min(start + grid_batch_size, len(ipix_flat))
-            sl = slice(start, end)
-            context = torch.stack([
-                torch.as_tensor(nulambda_lon_rad[ipix_flat[sl]], dtype=torch.float32),
-                torch.as_tensor(nulambda_colat_rad[ipix_flat[sl]], dtype=torch.float32),
-                torch.as_tensor(ei_centers_keV[iei_flat[sl]], dtype=torch.float32),
-            ], dim=1)
-            tot_aeff[sl] = np.asarray(nf_response.evaluate_effective_area(context))
-        tot_aeff = tot_aeff.reshape(npix, nEi)
+        # independently of the (Epsilon, Phi, Theta, Zeta) loop below. This
+        # is only used to weight the differential response below -- if you
+        # only care about the total effective area, use
+        # build_relative_hist_aeff() instead, which skips the (much more
+        # expensive) Step 2 entirely.
+        tot_aeff = _evaluate_effective_area_grid(
+            nf_response, nulambda_lon_rad, nulambda_colat_rad, ei_centers_keV, grid_batch_size)
 
         # --- Step 2: differential effective area (density) on the full 6D
         # grid, restricted to physical (Phi, Theta) pairs, processed in
@@ -346,6 +386,86 @@ def build_relative_hist_irf(nf_response: NFResponse,
     return output_path
 
 
+def build_relative_hist_aeff(nf_response: NFResponse,
+                             nulambda_axis: HealpixAxis,
+                             ei_axis: Axis,
+                             output_path: Union[str, Path],
+                             devices: Optional[List] = ("cpu",),
+                             grid_batch_size: int = 200_000,
+                             overwrite: bool = False,
+                             group: str = "aeff") -> Path:
+    """
+    Build a standalone total-effective-area histogram (axes ['NuLambda',
+    'Ei'], contents in cm^2) from an
+    UnpolarizedNFFarFieldInstrumentResponseFunction, suitable for the `aeff`
+    argument of IRFRelativeHistUnpolarized.
+
+    Since this only calls NFResponse.evaluate_effective_area() (no density
+    model evaluations), it is much cheaper than build_relative_hist_irf(),
+    and `nulambda_axis`/`ei_axis` can therefore use a finer grid than
+    whatever is used for the full differential response -- they don't need
+    to match its NuLambda/Ei binning at all.
+
+    Parameters
+    ----------
+    nf_response : NFResponse
+        Must be unpolarized (nf_response.is_polarized == False).
+    nulambda_axis : histpy.HealpixAxis
+        Target photon-direction grid, in the spacecraft frame.
+    ei_axis : histpy.Axis
+        Target true-energy grid, with units of energy.
+    output_path : str or Path
+        Where to write the resulting HDF5 file. Load it back with
+        histpy.Histogram.open(output_path, group) and pass the result as
+        IRFRelativeHistUnpolarized(..., aeff=<that histogram>).
+    devices, grid_batch_size, overwrite : see build_relative_hist_irf().
+    group : str, optional
+        HDF5 group name the histogram is written under. Defaults to
+        "aeff" (IRFRelativeHistUnpolarized.from_h5() only looks for "IRF",
+        so this is just a label for your own bookkeeping).
+
+    Returns
+    -------
+    Path
+        `output_path`, for convenience.
+    """
+
+    if nf_response.is_polarized:
+        raise ValueError("nf_response is polarized; build_relative_hist_aeff() only supports "
+                          "unpolarized NF responses (see UnpolarizedNFFarFieldInstrumentResponseFunction).")
+
+    if not isinstance(nulambda_axis, HealpixAxis):
+        raise ValueError("nulambda_axis must be a HealpixAxis")
+
+    if not isinstance(nulambda_axis.coordsys, SpacecraftFrame):
+        raise ValueError("nulambda_axis must be defined in the spacecraft frame")
+
+    if ei_axis.unit is None or not ei_axis.unit.is_equivalent(u.keV):
+        raise ValueError("ei_axis is expected to have units of energy.")
+
+    npix = nulambda_axis.nbins
+
+    nulambda_dir = nulambda_axis.pix2skycoord(np.arange(npix))
+    nulambda_lon_rad = nulambda_dir.lon.rad
+    nulambda_colat_rad = np.pi / 2 - np.clip(nulambda_dir.lat.rad, -np.pi / 2, np.pi / 2)
+
+    ei_centers_keV = _to_value(ei_axis.centers, u.keV)
+
+    nf_response.init_compute_pool(list(devices))
+    try:
+        tot_aeff = _evaluate_effective_area_grid(
+            nf_response, nulambda_lon_rad, nulambda_colat_rad, ei_centers_keV, grid_batch_size)
+    finally:
+        nf_response.shutdown_compute_pool()
+
+    hist = Histogram(Axes([nulambda_axis, ei_axis]), contents=tot_aeff, unit=u.cm * u.cm)
+
+    output_path = Path(output_path)
+    hist.write(str(output_path), name=group, overwrite=overwrite)
+
+    return output_path
+
+
 if __name__ == "__main__":
 
     logging.basicConfig(level=logging.INFO)
@@ -394,6 +514,43 @@ if __name__ == "__main__":
     #     PolarizationAxis(np.linspace(0, 360, 31) * u.deg, convention=StereographicConvention(), label='Zeta'),
     # ])
 
+    # --- aeff options ---
+    # Use a separate (here, finer) NuLambda/Ei grid for the total effective
+    # area than the one used for the full differential response, since
+    # build_relative_hist_aeff() is much cheaper (no density model calls) --
+    # otherwise the irf's own NuLambda/Ei axes are reused, matching the
+    # default IRFRelativeHistUnpolarized behavior when no aeff is given.
+    USE_SEPARATE_AEFF_GRID = True
+
+    # Only build the total effective area, skipping the full 6D
+    # differential response entirely (e.g. for a quick look, or if you
+    # already have the differential response from elsewhere).
+    AEFF_ONLY = False
+
+    aeff_path = None
+    if USE_SEPARATE_AEFF_GRID or AEFF_ONLY:
+        if USE_SEPARATE_AEFF_GRID:
+            aeff_nulambda_axis = HealpixAxis(nside=32, scheme='ring', coordsys=SpacecraftFrame(), label='NuLambda')
+            aeff_ei_axis = Axis(np.geomspace(50, 10000, 41) * u.keV, label='Ei', scale='log')
+        else:
+            aeff_nulambda_axis = axes['NuLambda']
+            aeff_ei_axis = axes['Ei']
+
+        aeff_path = build_relative_hist_aeff(
+            nf_response,
+            aeff_nulambda_axis,
+            aeff_ei_axis,
+            output_path=data_path / "relative_hist_aeff_from_nf_response.h5",
+            devices=["cpu"],
+            grid_batch_size=200_000,
+            overwrite=True)
+
+        print(f"Wrote {aeff_path}")
+
+    if AEFF_ONLY:
+        import sys
+        sys.exit(0)
+
     output_path = build_relative_hist_irf(
         nf_response,
         axes,
@@ -404,12 +561,14 @@ if __name__ == "__main__":
 
     print(f"Wrote {output_path}")
 
-    # Sanity check: load it back and compare against the NF response directly
+    # Sanity check: load it back (with the separately-built aeff, if any) and
+    # compare against the NF response directly
     from cosipy.response.relative_irf_hist import IRFRelativeHistUnpolarized
     from cosipy.response.ml.nf_instrument_response_function import UnpolarizedNFFarFieldInstrumentResponseFunction
     from cosipy.response.photon_types import PhotonWithDirectionAndEnergyInSCFrame
 
-    hist_irf = IRFRelativeHistUnpolarized.from_h5(output_path)
+    aeff_hist = Histogram.open(aeff_path, "aeff") if aeff_path is not None else None
+    hist_irf = IRFRelativeHistUnpolarized.from_h5(output_path, aeff=aeff_hist)
     nf_irf = UnpolarizedNFFarFieldInstrumentResponseFunction(nf_response)
 
     test_photon = PhotonWithDirectionAndEnergyInSCFrame(0.3, 0.2, 511)
