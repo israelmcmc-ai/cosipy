@@ -139,16 +139,16 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
         if not isinstance(axes['NuLambda'], HealpixAxis):
             raise ValueError("IRF NuLambda axis is expected to be of HealpixAxis type")
 
-        if not axes['Ei'].unit.is_equivalent('keV'):
+        if axes['Ei'].unit is None or not axes['Ei'].unit.is_equivalent('keV'):
             raise ValueError("Ei axis is expected to have units of energy.")
 
-        if not axes['Epsilon'].unit.is_equivalent(''):
+        if axes['Epsilon'].unit is not None and not axes['Epsilon'].unit.is_equivalent(''):
             raise ValueError("Epsilon axis is expected to be unitless")
 
-        if not axes['Phi'].unit.is_equivalent('deg'):
+        if axes['Phi'].unit is None or not axes['Phi'].unit.is_equivalent('deg'):
             raise ValueError("Phi axis is expected to have units of angle.")
 
-        if not axes['Theta'].unit.is_equivalent('deg'):
+        if axes['Theta'].unit is None or not axes['Theta'].unit.is_equivalent('deg'):
             raise ValueError("Theta axis is expected to have units of angle.")
 
         if not isinstance(axes['Zeta'], PolarizationAxis):
