@@ -300,6 +300,14 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
         self._npoints_parallel_thresh = npoints_parallel_thresh
         self._executor = ThreadPoolExecutor(max_workers=nthreads) if nthreads > 1 else None
 
+    @property
+    def epsilon_axis(self) -> Axis:
+        """
+        Unitless ``Epsilon = (Em - Ei)/Ei`` axis of the differential
+        response.
+        """
+        return self._diff_aeff.axes['Epsilon']
+
     def _parallel_interp(self, hist, build_args, raw_arrays):
         """
         Interpolate ``hist`` at the points described by ``raw_arrays``,
