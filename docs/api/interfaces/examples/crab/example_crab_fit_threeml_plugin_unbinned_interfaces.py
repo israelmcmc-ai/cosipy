@@ -132,7 +132,8 @@ def main():
     # Prepare point source response, which convolved the IRF with the SC orientation
     ei_samples = np.geomspace(100, 5000, 100)*u.keV
     psr = UnbinnedThreeMLPointSourceResponseTrapz(data, irf, sc_orientation,
-                                                  ei_samples)
+                                                  ei_samples,
+                                                  epsilon_axis = np.linspace(-1, 0.2, 61))
 
     # Prepare the model
     l = 184.56

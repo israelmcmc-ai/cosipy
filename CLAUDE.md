@@ -181,6 +181,21 @@ if it's blocked, say so and validate with synthetic histograms.
   every `Ei` can't catch `Ei`-interpolation problems. Use shapes that vary
   with `Ei` when testing those.
 
+## Point source folding (`UnbinnedThreeMLPointSourceResponseTrapz`, `cosipy/threeml/psr_fixed_ei.py`)
+
+- Torch-free replacement for `UnbinnedThreeMLPointSourceResponseIRFAdaptive`, used by both
+  tutorials. Trapezoidal rule in `Ei`; per-event nodes are `Em/(1 + Epsilon)` for the
+  `epsilon_axis` centers and outer edges (`irf.epsilon_axis`), **plus** the `energies` grid.
+  Expected counts use `energies` alone. `line_energies` handles Dirac deltas (weight 1).
+- Both node sets are needed. Validated against a brute-force 200k-point integral on real data:
+  Epsilon nodes alone were off by a median of +30% (wide Compton-tail bins), and a fixed 1000-point
+  grid alone by ~6% (p95). Combined with 50-100 log points: ~0.1-0.3% (p95). IRFAdaptive was ~2-3%
+  (p95), which shifts the Al-26 line width (sigma 2.11 vs 2.39 keV).
+- For a narrow line the `energies` spacing must resolve the line (the photopeak Epsilon bins are
+  ~7 keV wide at 1.8 MeV).
+- The full hist IRF files (9.6 GB) don't fit in a 15 GB sandbox (`from_h5` copies). Slicing the
+  `Ei` axis of the h5 with h5py (e.g. 916-5000 keV for Al-26) is enough for line validation.
+
 ## histpy gotchas
 
 - `Histogram.interp()` / `Axis.interp_weights()` on a `scale='log'` axis
