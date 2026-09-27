@@ -184,7 +184,7 @@ if it's blocked, say so and validate with synthetic histograms.
 ## Point source folding (`UnbinnedThreeMLPointSourceResponseTrapz`, `cosipy/threeml/psr_fixed_ei.py`)
 
 - Torch-free replacement for `UnbinnedThreeMLPointSourceResponseIRFAdaptive`, used by both
-  tutorials. Trapezoidal rule in `Ei`; per-event nodes are `Em/(1 + Epsilon)` for the
+  tutorials (with `integration_nodes()`, so the PSR cell comes after the source model). Trapezoidal rule in `Ei`; per-event nodes are `Em/(1 + Epsilon)` for the
   `epsilon_axis` centers and outer edges (`irf.epsilon_axis`), **plus** the `energies` grid.
   Expected counts use `energies` alone. `line_energies` handles Dirac deltas (weight 1).
 - Both node sets are needed. Validated against a brute-force 200k-point integral on real data:
