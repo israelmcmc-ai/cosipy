@@ -196,6 +196,17 @@ def test_integration_nodes_lines_and_epsilon():
     assert eps[0] == -0.1 and eps[-1] == 0.1
     assert np.sum(np.abs(eps) < 3 * RES) > np.sum(np.abs(eps) > 3 * RES)
 
+    # Without estimation, the IRF's own axis is used
+    with pytest.raises(ValueError):
+        UnbinnedThreeMLPointSourceResponseTrapz.integration_nodes(source, ToyIRF(), [100, 5000] * u.keV,
+                                                                  estimate_epsilon=False)
+
+    irf = ToyIRF()
+    irf.epsilon_axis = Axis(np.linspace(-0.1, 0.1, 41))
+    nodes = UnbinnedThreeMLPointSourceResponseTrapz.integration_nodes(source, irf, [100, 5000] * u.keV,
+                                                                      estimate_epsilon=False)
+    assert nodes['epsilon_axis'] is irf.epsilon_axis
+
     spectrum.zero_point_2.free = True
     with pytest.raises(ValueError):
         UnbinnedThreeMLPointSourceResponseTrapz.integration_nodes(source, ToyIRF(), [100, 5000] * u.keV)

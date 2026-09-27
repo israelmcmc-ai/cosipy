@@ -162,6 +162,7 @@ class UnbinnedThreeMLPointSourceResponseTrapz(UnbinnedThreeMLSourceResponseInter
                           irf: FarFieldSpectralInstrumentResponseFunctionInterface,
                           energy_range: Quantity,
                           accuracy: float = 0.01,
+                          estimate_epsilon: bool = True,
                           epsilon_range: Optional[tuple] = None,
                           nsamples: int = 128,
                           npoints_dense: int = 100_001,
@@ -188,11 +189,13 @@ class UnbinnedThreeMLPointSourceResponseTrapz(UnbinnedThreeMLSourceResponseInter
           for ``nsamples`` quasi-random points within that range. A
           missing bound is replaced by the current value. Parameters
           whose range spans more than a decade are sampled in log.
-        - ``epsilon_axis``: an array of ``Epsilon`` nodes, from the
-          ``irf.event_probability()`` of probe events as a function of
-          ``Epsilon``, for a few ``Ei`` within ``energy_range``,
-          off-axis angles and scattering angles, with the scattered
-          direction on the Compton cone.
+        - ``epsilon_axis``: if ``estimate_epsilon``, an array of
+          ``Epsilon`` nodes, from the ``irf.event_probability()`` of
+          probe events as a function of ``Epsilon``, for a few ``Ei``
+          within ``energy_range``, off-axis angles and scattering
+          angles, with the scattered direction on the Compton cone.
+          Otherwise, ``irf.epsilon_axis`` as is (e.g. for
+          ``IRFRelativeHistUnpolarized``).
 
         Parameters
         ----------
@@ -204,9 +207,13 @@ class UnbinnedThreeMLPointSourceResponseTrapz(UnbinnedThreeMLSourceResponseInter
             ``(min, max)`` Ei range of the integration.
         accuracy : float
             Target relative accuracy.
+        estimate_epsilon : bool
+            Estimate the ``Epsilon`` nodes from the IRF's event
+            probability. If False, the IRF must have an
+            ``epsilon_axis``.
         epsilon_range : tuple, optional
             ``(min, max)`` range of ``Epsilon`` with a non-zero
-            response. By default, the range of ``irf.epsilon_axis`` if
+            response, if ``estimate_epsilon``. By default, the range of ``irf.epsilon_axis`` if
             the IRF has one (e.g. ``IRFRelativeHistUnpolarized``), and
             ``(-1, 1)`` otherwise.
         nsamples : int
@@ -258,12 +265,18 @@ class UnbinnedThreeMLPointSourceResponseTrapz(UnbinnedThreeMLSourceResponseInter
                 par.value = value
 
         # Epsilon
-        if epsilon_range is None:
-            epsilon_axis = getattr(irf, 'epsilon_axis', None)
-            epsilon_range = (-1, 1) if epsilon_axis is None else (epsilon_axis.lo_lim, epsilon_axis.hi_lim)
+        epsilon_axis = getattr(irf, 'epsilon_axis', None)
 
-        epsilon = UnbinnedThreeMLPointSourceResponseTrapz._epsilon_nodes(irf, emin, emax, epsilon_range, accuracy,
-                                                                         npoints_dense_epsilon)
+        if estimate_epsilon:
+            if epsilon_range is None:
+                epsilon_range = (-1, 1) if epsilon_axis is None else (epsilon_axis.lo_lim, epsilon_axis.hi_lim)
+
+            epsilon = UnbinnedThreeMLPointSourceResponseTrapz._epsilon_nodes(irf, emin, emax, epsilon_range, accuracy,
+                                                                             npoints_dense_epsilon)
+        elif epsilon_axis is None:
+            raise ValueError(f"{type(irf).__name__} doesn't have an epsilon_axis. Use estimate_epsilon = True.")
+        else:
+            epsilon = epsilon_axis
 
         return {'energies': x[keep] * u.keV,
                 'line_energies': np.array(line_energies) * u.keV if line_energies else None,
