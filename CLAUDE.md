@@ -193,6 +193,14 @@ if it's blocked, say so and validate with synthetic histograms.
   (p95), which shifts the Al-26 line width (sigma 2.11 vs 2.39 keV).
 - For a narrow line the `energies` spacing must resolve the line (the photopeak Epsilon bins are
   ~7 keV wide at 1.8 MeV).
+- `integration_nodes(spectrum, irf, energy_range, accuracy=0.01)` suggests the constructor kwargs.
+  Both grids come from thinning a dense grid (trapz error per interval < accuracy relative to the
+  interval, with a floor of 1e-3 of the total; a 1e-6 floor doubled the nodes for no gain).
+  `energies`: union over the current values, the corners and 128 Sobol samples of the free
+  parameters' [min, max]. Epsilon: `irf.event_probability()` for probe events on the Compton cone
+  (range from `irf.epsilon_axis` if present, since the hist IRF clamps outside its axis instead of
+  going to zero). An array `epsilon_axis` is taken as the nodes; an `Axis` as centers + outer edges.
+  On real data it lands well within 1% (max ~0.25%), it's conservative for narrow lines.
 - The full hist IRF files (9.6 GB) don't fit in a 15 GB sandbox (`from_h5` copies). Slicing the
   `Ei` axis of the h5 with h5py (e.g. 916-5000 keV for Al-26) is enough for line validation.
 

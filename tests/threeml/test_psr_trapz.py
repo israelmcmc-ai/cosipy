@@ -31,10 +31,13 @@ class ToyIRF:
     def effective_area_cm2(self, photons):
         return np.full(photons.nphotons, AEFF)
 
-    def differential_effective_area_cm2(self, photons, events):
+    def event_probability(self, photons, events):
         ei = np.asarray(photons.energy_keV)
         em = np.asarray(events.energy_keV)
-        return AEFF * norm.pdf(em, loc=ei, scale=self.res * ei)
+        return norm.pdf(em, loc=ei, scale=self.res * ei)
+
+    def differential_effective_area_cm2(self, photons, events):
+        return AEFF * self.event_probability(photons, events)
 
 
 @pytest.fixture
@@ -171,31 +174,66 @@ def test_event_nodes_follow_epsilon(data, sc_history):
     assert weights[1].sum() == pytest.approx(5000 - 5000 / 1.1)
 
 
+def fixed(function):
+    for par in function.parameters.values():
+        par.free = False
+    return function
+
+
 def test_integration_nodes_lines_and_epsilon():
-    spectrum = Powerlaw() + DiracDelta(value=1e-3, zero_point=511.)
+    spectrum = fixed(Powerlaw()) + DiracDelta(value=1e-3, zero_point=511.)
     source = PointSource('src', l=0, b=0, spectral_shape=spectrum)
 
-    with pytest.raises(ValueError):
-        UnbinnedThreeMLPointSourceResponseTrapz.integration_nodes(source, ToyIRF(), [100, 5000] * u.keV)
+    nodes = UnbinnedThreeMLPointSourceResponseTrapz.integration_nodes(source, ToyIRF(), [100, 5000] * u.keV,
+                                                                      epsilon_range=(-0.1, 0.1))
 
-    irf = ToyIRF()
-    irf.epsilon_axis = Axis(np.linspace(-0.1, 0.1, 41))
-    nodes = UnbinnedThreeMLPointSourceResponseTrapz.integration_nodes(source, irf, [100, 5000] * u.keV)
-
-    assert nodes['epsilon_axis'] is irf.epsilon_axis
     np.testing.assert_allclose(nodes['line_energies'].to_value(u.keV), [511.])
     assert nodes['energies'].min() == 100 * u.keV and nodes['energies'].max() == 5000 * u.keV
     assert 511 * u.keV not in nodes['energies']
 
+    # Epsilon nodes span the range and concentrate within the energy resolution
+    eps = nodes['epsilon_axis']
+    assert eps[0] == -0.1 and eps[-1] == 0.1
+    assert np.sum(np.abs(eps) < 3 * RES) > np.sum(np.abs(eps) > 3 * RES)
 
-@pytest.mark.parametrize("spectrum, energy_range, res, eps_edges",
-                         [(Powerlaw(K=1e-2, index=-3, piv=100), (100, 5000), 0.3, np.linspace(-0.9, 0.9, 7)),
-                          (Gaussian(F=1e-3, mu=1805., sigma=1.), (1790, 1830), RES, np.linspace(-0.1, 0.1, 41))])
-def test_integration_nodes_accuracy(data, sc_history, energy_m, spectrum, energy_range, res, eps_edges):
+    spectrum.zero_point_2.free = True
+    with pytest.raises(ValueError):
+        UnbinnedThreeMLPointSourceResponseTrapz.integration_nodes(source, ToyIRF(), [100, 5000] * u.keV)
+
+
+def test_integration_nodes_parameter_range():
+    spectrum = Gaussian(F=1e-3, mu=1805., sigma=3.)
+    spectrum.F.free = False
+    spectrum.mu.bounds = (1800, 1820)
+    spectrum.sigma.bounds = (0.5, 3)
+
+    energy_range = [1790, 1830] * u.keV
+    nodes = UnbinnedThreeMLPointSourceResponseTrapz.integration_nodes(spectrum, ToyIRF(), energy_range,
+                                                                      epsilon_range=(-0.1, 0.1))
+
+    # Parameters are restored
+    assert spectrum.mu.value == 1805. and spectrum.sigma.value == 3.
+
+    # A 0.5 keV wide line can be anywhere within [1800, 1820]
+    e = nodes['energies'].to_value(u.keV)
+    inside = (e >= 1800) & (e <= 1820)
+    assert np.diff(e[inside]).max() < 0.5
+
+    spectrum.mu.free = False
+    spectrum.sigma.free = False
+    nodes_fixed = UnbinnedThreeMLPointSourceResponseTrapz.integration_nodes(spectrum, ToyIRF(), energy_range,
+                                                                            epsilon_range=(-0.1, 0.1))
+    assert nodes_fixed['energies'].size < e.size / 2
+
+
+@pytest.mark.parametrize("spectrum, energy_range, res, eps_range",
+                         [(fixed(Powerlaw(K=1e-2, index=-3, piv=100)), (100, 5000), 0.3, (-0.9, 0.9)),
+                          (fixed(Gaussian(F=1e-3, mu=1805., sigma=1.)), (1790, 1830), RES, (-0.1, 0.1))])
+def test_integration_nodes_accuracy(data, sc_history, energy_m, spectrum, energy_range, res, eps_range):
     source = PointSource('src', l=0, b=0, spectral_shape=spectrum)
 
     nodes = UnbinnedThreeMLPointSourceResponseTrapz.integration_nodes(spectrum, ToyIRF(res), energy_range * u.keV,
-                                                                      accuracy=0.01, epsilon_axis=Axis(eps_edges))
+                                                                      accuracy=0.01, epsilon_range=eps_range)
 
     psr = UnbinnedThreeMLPointSourceResponseTrapz(data, ToyIRF(res), sc_history, offset=None, **nodes)
     psr.set_source(source)
@@ -205,5 +243,5 @@ def test_integration_nodes_accuracy(data, sc_history, energy_m, spectrum, energy
 
     density = psr.expectation_density()
     for em, d in zip(energy_m, density):
-        expected = expected_density(em, spectrum, *energy_range, eps_edges[0], eps_edges[-1], res=res)
+        expected = expected_density(em, spectrum, *energy_range, *eps_range, res=res)
         assert d == pytest.approx(expected, rel=1e-2, abs=1e-12)
