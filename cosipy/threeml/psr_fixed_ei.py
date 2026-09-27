@@ -2,7 +2,8 @@ import copy
 from typing import Optional, Iterable, Type, Union
 
 import numpy as np
-from astromodels import PointSource
+from astromodels import PointSource, DiracDelta
+from astromodels.functions.function import Function, CompositeFunction
 from astromodels.sources import Source
 from astropy.time import Time
 from astropy.units import Quantity
@@ -151,6 +152,103 @@ class UnbinnedThreeMLPointSourceResponseTrapz(UnbinnedThreeMLSourceResponseInter
 
         self._nevents = None
         self._expectation_density = None
+
+    @staticmethod
+    def integration_nodes(spectrum: Union[PointSource, Function],
+                          irf: FarFieldSpectralInstrumentResponseFunctionInterface,
+                          energy_range: Quantity,
+                          accuracy: float = 0.01,
+                          epsilon_axis: Optional[Union[Axis, np.ndarray]] = None,
+                          npoints_dense: int = 100_001) -> dict:
+        """
+        Suggest the ``energies``, ``line_energies`` and ``epsilon_axis``
+        arguments for a given spectrum and IRF, aiming at a relative
+        accuracy of about ``accuracy`` for the expected counts and the
+        expectation density of each event.
+
+        - ``line_energies``: the ``zero_point`` of every ``DiracDelta``
+          component.
+        - ``energies``: the spectrum (without the Dirac deltas) is
+          evaluated on a dense log-spaced grid, which is then thinned
+          out such that the trapezoidal rule on each remaining interval
+          agrees with the dense grid within ``accuracy``, relative to
+          that interval's own integral. This resolves narrow features
+          such as a Gaussian line, as long as the dense grid does.
+        - ``epsilon_axis``: ``irf.epsilon_axis`` (e.g. for
+          ``IRFRelativeHistUnpolarized``), unless given explicitly.
+
+        The nodes are only optimal for the spectral parameters at the
+        time of the call. Use values close to the expected ones, and
+        keep in mind that e.g. a narrower line during a fit needs a
+        finer grid.
+
+        Parameters
+        ----------
+        spectrum : astromodels.PointSource or astromodels.Function
+            Source, or its spectral shape.
+        irf : FarFieldSpectralInstrumentResponseFunctionInterface
+            Instrument response.
+        energy_range : Quantity
+            ``(min, max)`` Ei range of the integration.
+        accuracy : float
+            Target relative accuracy.
+        epsilon_axis : histpy.Axis or numpy.ndarray, optional
+            Required if ``irf`` doesn't have an ``epsilon_axis``.
+        npoints_dense : int
+            Number of points of the dense reference grid.
+
+        Returns
+        -------
+        dict
+            Keyword arguments ``energies``, ``line_energies`` and
+            ``epsilon_axis`` for this class' constructor.
+        """
+
+        if epsilon_axis is None:
+            epsilon_axis = getattr(irf, 'epsilon_axis', None)
+            if epsilon_axis is None:
+                raise ValueError(f"{type(irf).__name__} doesn't have an epsilon_axis. Provide one explicitly.")
+
+        if isinstance(spectrum, PointSource):
+            shapes = [component.shape for component in spectrum.components.values()]
+        else:
+            shapes = [spectrum]
+
+        functions = []
+        for shape in shapes:
+            functions += list(shape.functions) if isinstance(shape, CompositeFunction) else [shape]
+
+        continuum = [f for f in functions if not isinstance(f, DiracDelta)]
+        line_energies = [f.zero_point.value for f in functions if isinstance(f, DiracDelta)]
+
+        emin, emax = energy_range.to_value(u.keV)
+        x = np.geomspace(emin, emax, npoints_dense)
+        y = np.sum([f(x) for f in continuum], axis=0) if continuum else np.zeros_like(x)
+
+        cum_integral = np.concatenate([[0], np.cumsum(np.diff(x) * (y[1:] + y[:-1]) / 2)])
+        floor = 1e-6 * cum_integral[-1]
+
+        keep = np.zeros(x.size, dtype=bool)
+        keep[[0, -1]] = True
+        intervals = [(0, x.size - 1)]
+
+        while intervals:
+            i, j = intervals.pop()
+
+            if j - i < 2:
+                continue
+
+            coarse = (x[j] - x[i]) * (y[i] + y[j]) / 2
+            fine = cum_integral[j] - cum_integral[i]
+
+            if abs(coarse - fine) > accuracy * max(fine, floor):
+                m = (i + j) // 2
+                keep[m] = True
+                intervals += [(i, m), (m, j)]
+
+        return {'energies': x[keep] * u.keV,
+                'line_energies': np.array(line_energies) * u.keV if line_energies else None,
+                'epsilon_axis': epsilon_axis}
 
     @staticmethod
     def _trapz_weights_1d(x):

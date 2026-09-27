@@ -169,3 +169,41 @@ def test_event_nodes_follow_epsilon(data, sc_history):
 
     assert nodes[1][weights[1] > 0].max() == pytest.approx(5000)
     assert weights[1].sum() == pytest.approx(5000 - 5000 / 1.1)
+
+
+def test_integration_nodes_lines_and_epsilon():
+    spectrum = Powerlaw() + DiracDelta(value=1e-3, zero_point=511.)
+    source = PointSource('src', l=0, b=0, spectral_shape=spectrum)
+
+    with pytest.raises(ValueError):
+        UnbinnedThreeMLPointSourceResponseTrapz.integration_nodes(source, ToyIRF(), [100, 5000] * u.keV)
+
+    irf = ToyIRF()
+    irf.epsilon_axis = Axis(np.linspace(-0.1, 0.1, 41))
+    nodes = UnbinnedThreeMLPointSourceResponseTrapz.integration_nodes(source, irf, [100, 5000] * u.keV)
+
+    assert nodes['epsilon_axis'] is irf.epsilon_axis
+    np.testing.assert_allclose(nodes['line_energies'].to_value(u.keV), [511.])
+    assert nodes['energies'].min() == 100 * u.keV and nodes['energies'].max() == 5000 * u.keV
+    assert 511 * u.keV not in nodes['energies']
+
+
+@pytest.mark.parametrize("spectrum, energy_range, res, eps_edges",
+                         [(Powerlaw(K=1e-2, index=-3, piv=100), (100, 5000), 0.3, np.linspace(-0.9, 0.9, 7)),
+                          (Gaussian(F=1e-3, mu=1805., sigma=1.), (1790, 1830), RES, np.linspace(-0.1, 0.1, 41))])
+def test_integration_nodes_accuracy(data, sc_history, energy_m, spectrum, energy_range, res, eps_edges):
+    source = PointSource('src', l=0, b=0, spectral_shape=spectrum)
+
+    nodes = UnbinnedThreeMLPointSourceResponseTrapz.integration_nodes(spectrum, ToyIRF(res), energy_range * u.keV,
+                                                                      accuracy=0.01, epsilon_axis=Axis(eps_edges))
+
+    psr = UnbinnedThreeMLPointSourceResponseTrapz(data, ToyIRF(res), sc_history, offset=None, **nodes)
+    psr.set_source(source)
+
+    nexp = LIVETIME * AEFF * quad(spectrum, *energy_range, points=[1805.], limit=200)[0]
+    assert psr.expected_counts() == pytest.approx(nexp, rel=1e-2)
+
+    density = psr.expectation_density()
+    for em, d in zip(energy_m, density):
+        expected = expected_density(em, spectrum, *energy_range, eps_edges[0], eps_edges[-1], res=res)
+        assert d == pytest.approx(expected, rel=1e-2, abs=1e-12)
