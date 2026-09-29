@@ -6,11 +6,13 @@ relative-coordinates histogram IRF (`IRFRelativeHistUnpolarized`).
 ## Repo and branch workflow
 
 - This is `israelmcmc-ai/cosipy`, a fork of `cositools/cosipy`. The working
-  branch is `rel_irf_hist`, which feeds the upstream PR `cositools/cosipy#641`.
-- **Don't commit directly to `rel_irf_hist`.** Put work on a new branch and
-  open a PR with base `rel_irf_hist`. Unrelated side fixes (e.g. to
-  `EnergySelector`, `DistanceSelector`, the chain selector) go on their own
-  branch with a PR against `develop`.
+  branch is `develop_israel`: `rel_irf_hist` (which feeds the upstream PR
+  `cositools/cosipy#641`) plus this CLAUDE.md, which is kept out of
+  `rel_irf_hist` so it doesn't go upstream.
+- **Don't commit directly to `develop_israel` or `rel_irf_hist`.** Put work on
+  a new branch and open a PR with base `develop_israel`. Unrelated side fixes
+  (e.g. to `EnergySelector`, `DistanceSelector`, the chain selector) go on
+  their own branch with a PR against `develop`.
 - The maintainer often pushes to the same PR branch while you work (e.g.
   comment edits, scratch scripts). Always `git fetch` before pushing, and
   only rebase *your own unpushed* commits on top; never force-push over
