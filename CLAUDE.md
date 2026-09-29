@@ -184,23 +184,27 @@ if it's blocked, say so and validate with synthetic histograms.
 ## Point source folding (`UnbinnedThreeMLPointSourceResponseTrapz`, `cosipy/threeml/psr_fixed_ei.py`)
 
 - Torch-free replacement for `UnbinnedThreeMLPointSourceResponseIRFAdaptive`, used by both
-  tutorials (with `integration_nodes()`, so the PSR cell comes after the source model). Trapezoidal rule in `Ei`; per-event nodes are `Em/(1 + Epsilon)` for the
-  `epsilon_axis` centers and outer edges (`irf.epsilon_axis`), **plus** the `energies` grid.
-  Expected counts use `energies` alone. `line_energies` handles Dirac deltas (weight 1).
+  tutorials (with `integration_nodes()`, so the PSR cell comes after the source model).
+  Trapezoidal rule in `Ei`; per-event nodes are `Em/(1 + Epsilon)` for the `epsilon_nodes`
+  (array-like), **plus** the `energy_nodes`. Expected counts use `energy_nodes` alone.
+  `mono_nodes` handle Dirac deltas (weight 1); continuum nodes that land exactly on one are
+  shifted by one ULP so the delta isn't picked up by the trapz.
 - Both node sets are needed. Validated against a brute-force 200k-point integral on real data:
   Epsilon nodes alone were off by a median of +30% (wide Compton-tail bins), and a fixed 1000-point
   grid alone by ~6% (p95). Combined with 50-100 log points: ~0.1-0.3% (p95). IRFAdaptive was ~2-3%
   (p95), which shifts the Al-26 line width (sigma 2.11 vs 2.39 keV).
-- For a narrow line the `energies` spacing must resolve the line (the photopeak Epsilon bins are
+- For a narrow line the `energy_nodes` spacing must resolve the line (the photopeak Epsilon bins are
   ~7 keV wide at 1.8 MeV).
 - `integration_nodes(spectrum, irf, energy_range, accuracy=0.01)` suggests the constructor kwargs.
   Both grids come from thinning a dense grid (trapz error per interval < accuracy relative to the
   interval, with a floor of 1e-3 of the total; a 1e-6 floor doubled the nodes for no gain).
-  `energies`: union over the current values, the corners and 128 Sobol samples of the free
-  parameters' [min, max]. Epsilon: `irf.event_probability()` for probe events on the Compton cone
-  (range from `irf.epsilon_axis` if present, since the hist IRF clamps outside its axis instead of
-  going to zero). An array `epsilon_axis` is taken as the nodes; an `Axis` as centers + outer edges.
-  On real data it lands well within 1% (max ~0.25%), it's conservative for narrow lines.
+  `energy_nodes`: union over the current values, the corners and `nsamples` (128) Sobol samples of
+  the free parameters' [min, max], so bounds matter as much as values. `epsilon_nodes`:
+  `irf.event_probability()` for fixed probe events on the Compton cone (documented in the
+  docstring), with the range from `irf.axes['Epsilon']` if present, since the hist IRF clamps
+  outside its axis instead of going to zero. `estimate_epsilon=False` uses the centers + outer
+  edges of `irf.axes['Epsilon']` instead. On real data it lands well within 1% (max ~0.25%).
+- `IRFRelativeHistUnpolarized.axes` exposes the internal differential-response axes (unitless).
 - The full hist IRF files (9.6 GB) don't fit in a 15 GB sandbox (`from_h5` copies). Slicing the
   `Ei` axis of the h5 with h5py (e.g. 916-5000 keV for Al-26) is enough for line validation.
 

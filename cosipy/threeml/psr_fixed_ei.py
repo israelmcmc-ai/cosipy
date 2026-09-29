@@ -3,12 +3,12 @@ import itertools
 from typing import Optional, Iterable, Type, Union
 
 import numpy as np
+from numpy.typing import ArrayLike
 from astromodels import PointSource, DiracDelta
 from astromodels.functions.function import Function, CompositeFunction
 from astromodels.sources import Source
 from astropy.time import Time
 from astropy.units import Quantity
-from histpy import Axis
 from scipy.stats import qmc
 
 from cosipy import SpacecraftHistory
@@ -29,9 +29,9 @@ class UnbinnedThreeMLPointSourceResponseTrapz(UnbinnedThreeMLSourceResponseInter
                  data: TimeTagEmCDSEventDataInSCFrameInterface,
                  irf: FarFieldSpectralInstrumentResponseFunctionInterface,
                  sc_history: SpacecraftHistory,
-                 energies: Quantity,
-                 epsilon_axis: Union[Axis, np.ndarray],
-                 line_energies: Optional[Quantity] = None,
+                 energy_nodes: Quantity,
+                 epsilon_nodes: ArrayLike,
+                 mono_nodes: Optional[Quantity] = None,
                  batch_size: int = 1_000_000,
                  offset: Optional[float] = 1e-12):
         """
@@ -41,12 +41,16 @@ class UnbinnedThreeMLPointSourceResponseTrapz(UnbinnedThreeMLSourceResponseInter
         For each event, the Ei integration nodes are placed at
         ``Ei = Em / (1 + Epsilon)`` for every ``Epsilon`` node, so they
         follow the energy dispersion of the IRF, plus at every point of
-        ``energies``, so the spectrum and the IRF's ``Ei`` dependence
-        are also resolved where the ``Epsilon`` nodes are sparse. The
-        integral is bounded by ``[min(energies), max(energies)]``.
+        ``energy_nodes``, so the spectrum and the IRF's ``Ei``
+        dependence are also resolved where the ``Epsilon`` nodes are
+        sparse. The integral is bounded by
+        ``[min(energy_nodes), max(energy_nodes)]``.
 
-        The total expected counts are integrated over the ``energies``
-        grid alone, since there is no measured energy to anchor on.
+        The total expected counts are integrated over ``energy_nodes``
+        alone, since there is no measured energy to anchor on.
+
+        See ``integration_nodes()`` to choose the nodes for a given
+        spectrum and IRF.
 
         Earth occultation and the livetime fraction are accounted for.
         All IRF queries are cached and only recomputed when the source
@@ -60,27 +64,24 @@ class UnbinnedThreeMLPointSourceResponseTrapz(UnbinnedThreeMLSourceResponseInter
             Instrument response.
         sc_history : SpacecraftHistory
             Spacecraft orientation and livetime.
-        energies : Quantity
+        energy_nodes : Quantity
             Ei points where the spectrum is always sampled, both for the
             total expected counts and for each event (within its
             ``Epsilon`` range). Its range bounds the integral. Add
             points here to resolve narrow spectral features, e.g. a
             narrow Gaussian line.
-        epsilon_axis : histpy.Axis or numpy.ndarray
-            Fractional energy dispersion ``Epsilon = (Em - Ei)/Ei``. If
-            an Axis (e.g. ``irf.epsilon_axis`` for an
-            ``IRFRelativeHistUnpolarized``), its bin centers plus its
-            outer edges are used as nodes. If an array, the nodes
-            themselves (see ``integration_nodes()``). Events are assumed
-            to have zero response outside of the nodes' range.
-        line_energies : Quantity, optional
+        epsilon_nodes : array-like
+            Nodes of the fractional energy dispersion
+            ``Epsilon = (Em - Ei)/Ei``. Events are assumed to have zero
+            response outside of the nodes' range.
+        mono_nodes : Quantity, optional
             Energies of monoenergetic (Dirac delta) components. They
             are not integrated: the spectrum evaluated there is taken
             as the integrated line flux (ph/cm2/s), as returned by
             astromodels' ``DiracDelta``, and multiplied by the response
             at that energy. Any continuum component at these exact
             energies would be misinterpreted as line flux. Don't include
-            them in ``energies``.
+            them in ``energy_nodes``.
         batch_size : int
             Maximum number of IRF evaluations per call.
         offset : float, optional
@@ -99,17 +100,13 @@ class UnbinnedThreeMLPointSourceResponseTrapz(UnbinnedThreeMLSourceResponseInter
         self._batch_size = batch_size
         self._offset = offset
 
-        self._energies_keV = np.unique(np.asarray(energies.to_value(u.keV), dtype=float))
+        self._line_energies_keV = np.zeros(0) if mono_nodes is None else np.unique(mono_nodes.to_value(u.keV))
+        self._energies_keV = self._avoid_mono_nodes(np.unique(np.asarray(energy_nodes.to_value(u.keV), dtype=float)))
         self._emin, self._emax = self._energies_keV[0], self._energies_keV[-1]
-        self._line_energies_keV = np.zeros(0) if line_energies is None else np.unique(line_energies.to_value(u.keV))
 
         self._trapz_weights = self._trapz_weights_1d(self._energies_keV)
 
-        if isinstance(epsilon_axis, Axis):
-            eps_edges = np.asarray(epsilon_axis.edges, dtype=float)
-            self._eps_nodes = np.concatenate([eps_edges[:1], np.asarray(epsilon_axis.centers, dtype=float), eps_edges[-1:]])
-        else:
-            self._eps_nodes = np.unique(np.asarray(epsilon_axis, dtype=float))
+        self._eps_nodes = np.unique(np.asarray(epsilon_nodes, dtype=float))
         self._eps_min, self._eps_max = self._eps_nodes[0], self._eps_nodes[-1]
 
         # Event info
@@ -168,34 +165,59 @@ class UnbinnedThreeMLPointSourceResponseTrapz(UnbinnedThreeMLSourceResponseInter
                           npoints_dense: int = 100_001,
                           npoints_dense_epsilon: int = 20_001) -> dict:
         """
-        Suggest the ``energies``, ``line_energies`` and ``epsilon_axis``
-        arguments for a given spectrum and IRF, aiming at a relative
-        accuracy of about ``accuracy`` for the expected counts and the
-        expectation density of each event.
+        Suggest the ``energy_nodes``, ``mono_nodes`` and
+        ``epsilon_nodes`` arguments for a given spectrum and IRF, aiming
+        at a relative accuracy of about ``accuracy`` for the expected
+        counts and the expectation density of each event.
 
-        Both ``energies`` and the ``Epsilon`` nodes are obtained by
+        Both ``energy_nodes`` and ``epsilon_nodes`` are obtained by
         thinning out a dense grid such that the trapezoidal rule on each
         remaining interval agrees with the dense grid within
         ``accuracy``, relative to that interval's own integral (or to
         1e-3 of the total, for negligible tails). This resolves narrow
         features as long as the dense grid does.
 
-        - ``line_energies``: the ``zero_point`` of every ``DiracDelta``
+        - ``mono_nodes``: the ``zero_point`` of every ``DiracDelta``
           component. They must be fixed.
-        - ``energies``: the spectrum without the Dirac deltas, on a
+        - ``energy_nodes``: the spectrum without the Dirac deltas, on a
           dense log-spaced grid. The union of the nodes needed for the
           current parameter values, for every corner of the
           ``[min_value, max_value]`` range of the free parameters, and
           for ``nsamples`` quasi-random points within that range. A
           missing bound is replaced by the current value. Parameters
           whose range spans more than a decade are sampled in log.
-        - ``epsilon_axis``: if ``estimate_epsilon``, an array of
-          ``Epsilon`` nodes, from the ``irf.event_probability()`` of
-          probe events as a function of ``Epsilon``, for a few ``Ei``
-          within ``energy_range``, off-axis angles and scattering
-          angles, with the scattered direction on the Compton cone.
-          Otherwise, ``irf.epsilon_axis`` as is (e.g. for
-          ``IRFRelativeHistUnpolarized``).
+        - ``epsilon_nodes``: if ``estimate_epsilon``, the nodes needed
+          to resolve ``irf.event_probability()`` as a function of
+          ``Epsilon`` for a set of probe events. Otherwise, the bin
+          centers plus the outer edges of ``irf.axes['Epsilon']``
+          (e.g. for ``IRFRelativeHistUnpolarized``).
+
+        Not only the current parameter values matter, but also their
+        bounds: the nodes must resolve the spectrum anywhere within
+        them. Choose the bounds carefully. E.g. a Gaussian line whose
+        width can go down to 0 would need an arbitrarily fine grid,
+        across the whole range of its centroid. If the bounds are wide
+        compared to the features of the spectrum (e.g. a narrow line
+        whose centroid can move a lot), increase ``nsamples`` so the
+        quasi-random samples cover the range densely enough. If a line
+        is narrower than the energy resolution and its width is not of
+        interest, a ``DiracDelta`` is much cheaper than resolving it.
+
+        The probe events used to estimate the ``Epsilon`` nodes are a
+        fixed heuristic, meant to capture the variety of shapes of the
+        energy dispersion without evaluating the IRF too many times:
+
+        - 4 ``Ei`` log-spaced across ``energy_range``, since the
+          dispersion changes slowly with ``Ei``, and the ``energy_nodes``
+          already resolve the ``Ei`` dependence.
+        - Off-axis angles of 0, 30 and 60 deg, which span most of the
+          field of view, at a single azimuth.
+        - Compton scattering angles of 10, 30, 60, 90 and 120 deg, since
+          the dispersion (e.g. the escape tail) depends on it.
+        - The scattered direction is on the Compton cone (ARM = 0),
+          where the response peaks.
+
+        The union of the nodes needed for every probe is kept.
 
         Parameters
         ----------
@@ -209,13 +231,13 @@ class UnbinnedThreeMLPointSourceResponseTrapz(UnbinnedThreeMLSourceResponseInter
             Target relative accuracy.
         estimate_epsilon : bool
             Estimate the ``Epsilon`` nodes from the IRF's event
-            probability. If False, the IRF must have an
-            ``epsilon_axis``.
+            probability. If False, the IRF must have an ``Epsilon``
+            axis in ``irf.axes``.
         epsilon_range : tuple, optional
             ``(min, max)`` range of ``Epsilon`` with a non-zero
-            response, if ``estimate_epsilon``. By default, the range of ``irf.epsilon_axis`` if
-            the IRF has one (e.g. ``IRFRelativeHistUnpolarized``), and
-            ``(-1, 1)`` otherwise.
+            response, if ``estimate_epsilon``. By default, the range of
+            ``irf.axes['Epsilon']`` if the IRF has one (e.g.
+            ``IRFRelativeHistUnpolarized``), and ``(-1, 1)`` otherwise.
         nsamples : int
             Number of quasi-random samples of the free parameters.
         npoints_dense : int
@@ -226,8 +248,8 @@ class UnbinnedThreeMLPointSourceResponseTrapz(UnbinnedThreeMLSourceResponseInter
         Returns
         -------
         dict
-            Keyword arguments ``energies``, ``line_energies`` and
-            ``epsilon_axis`` for this class' constructor.
+            Keyword arguments ``energy_nodes``, ``mono_nodes`` and
+            ``epsilon_nodes`` for this class' constructor.
         """
 
         if isinstance(spectrum, PointSource):
@@ -265,7 +287,8 @@ class UnbinnedThreeMLPointSourceResponseTrapz(UnbinnedThreeMLSourceResponseInter
                 par.value = value
 
         # Epsilon
-        epsilon_axis = getattr(irf, 'epsilon_axis', None)
+        axes = getattr(irf, 'axes', None)
+        epsilon_axis = axes['Epsilon'] if axes is not None and 'Epsilon' in axes.labels else None
 
         if estimate_epsilon:
             if epsilon_range is None:
@@ -274,13 +297,13 @@ class UnbinnedThreeMLPointSourceResponseTrapz(UnbinnedThreeMLSourceResponseInter
             epsilon = UnbinnedThreeMLPointSourceResponseTrapz._epsilon_nodes(irf, emin, emax, epsilon_range, accuracy,
                                                                              npoints_dense_epsilon)
         elif epsilon_axis is None:
-            raise ValueError(f"{type(irf).__name__} doesn't have an epsilon_axis. Use estimate_epsilon = True.")
+            raise ValueError(f"{type(irf).__name__} doesn't have an Epsilon axis. Use estimate_epsilon = True.")
         else:
-            epsilon = epsilon_axis
+            epsilon = np.concatenate([epsilon_axis.edges[:1], epsilon_axis.centers, epsilon_axis.edges[-1:]])
 
-        return {'energies': x[keep] * u.keV,
-                'line_energies': np.array(line_energies) * u.keV if line_energies else None,
-                'epsilon_axis': epsilon}
+        return {'energy_nodes': x[keep] * u.keV,
+                'mono_nodes': np.array(line_energies) * u.keV if line_energies else None,
+                'epsilon_nodes': epsilon}
 
     @staticmethod
     def _thin(x, y, accuracy):
@@ -350,7 +373,7 @@ class UnbinnedThreeMLPointSourceResponseTrapz(UnbinnedThreeMLSourceResponseInter
         eps_lo, eps_hi = epsilon_range
         eps = np.linspace(max(eps_lo, -1 + 1e-3), eps_hi, npoints_dense)
 
-        # Photons along (theta, lon = 0), scattered direction on the Compton cone
+        # See the integration_nodes() docstring for these choices
         energy, theta, phi = [a.ravel() for a in np.meshgrid(np.geomspace(emin, emax, 4),
                                                              np.deg2rad([0, 30, 60]),
                                                              np.deg2rad([10, 30, 60, 90, 120]),
@@ -381,6 +404,14 @@ class UnbinnedThreeMLPointSourceResponseTrapz(UnbinnedThreeMLSourceResponseInter
         nodes[[0, -1]] = eps_lo, eps_hi
 
         return nodes
+
+    def _avoid_mono_nodes(self, energies_keV):
+        """
+        Shift continuum nodes that coincide exactly with a mono node by
+        one ULP, so the spectrum there doesn't include the Dirac delta.
+        """
+        return np.where(np.isin(energies_keV, self._line_energies_keV),
+                        np.nextafter(energies_keV, np.inf), energies_keV)
 
     @staticmethod
     def _trapz_weights_1d(x):
@@ -541,7 +572,7 @@ class UnbinnedThreeMLPointSourceResponseTrapz(UnbinnedThreeMLSourceResponseInter
 
             nonzero = weights > 0
             event_idx = np.nonzero(nonzero)[0] + start
-            nodes = nodes[nonzero]
+            nodes = self._avoid_mono_nodes(nodes[nonzero])
             weights = weights[nonzero]
 
             resp = self._differential_aeff(event_idx, lon, lat, nodes)

@@ -133,7 +133,7 @@ def main():
     ei_samples = np.geomspace(100, 5000, 100)*u.keV
     psr = UnbinnedThreeMLPointSourceResponseTrapz(data, irf, sc_orientation,
                                                   ei_samples,
-                                                  epsilon_axis = np.linspace(-1, 0.2, 61))
+                                                  epsilon_nodes = np.linspace(-1, 0.2, 61))
 
     # Prepare the model
     l = 184.56

@@ -301,12 +301,13 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
         self._executor = ThreadPoolExecutor(max_workers=nthreads) if nthreads > 1 else None
 
     @property
-    def epsilon_axis(self) -> Axis:
+    def axes(self) -> Axes:
         """
-        Unitless ``Epsilon = (Em - Ei)/Ei`` axis of the differential
-        response.
+        Axes of the differential response: ``NuLambda``, ``Ei`` (keV),
+        ``Epsilon``, ``Phi``, ``Theta`` and ``Zeta`` (rad), without
+        units. The total effective area might use a finer ``Ei`` grid.
         """
-        return self._diff_aeff.axes['Epsilon']
+        return self._diff_aeff.axes
 
     def _parallel_interp(self, hist, build_args, raw_arrays):
         """

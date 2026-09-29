@@ -6,7 +6,7 @@ from astropy.coordinates import SkyCoord
 from astropy.time import Time
 import astropy.units as u
 from astromodels import PointSource, Gaussian, DiracDelta, Powerlaw
-from histpy import Axis
+from histpy import Axis, Axes
 from scoords import SpacecraftFrame
 from scipy.integrate import quad
 from scipy.stats import norm
@@ -78,8 +78,8 @@ def sc_history():
 
 
 def make_psr(data, sc_history, res=RES, **kwargs):
-    kwargs.setdefault('energies', np.geomspace(100, 5000, 200) * u.keV)
-    kwargs.setdefault('epsilon_axis', Axis(np.linspace(-0.1, 0.1, 41)))
+    kwargs.setdefault('energy_nodes', np.geomspace(100, 5000, 200) * u.keV)
+    kwargs.setdefault('epsilon_nodes', np.linspace(-0.1, 0.1, 41))
     kwargs.setdefault('offset', None)
     return UnbinnedThreeMLPointSourceResponseTrapz(data, ToyIRF(res), sc_history, **kwargs)
 
@@ -114,8 +114,8 @@ def test_broad_dispersion(data, sc_history, energy_m):
     spectrum = Powerlaw(K=1e-2, index=-3, piv=100)
     source = PointSource('src', l=0, b=0, spectral_shape=spectrum)
 
-    psr = make_psr(data, sc_history, res=0.3, epsilon_axis=Axis(np.linspace(-0.9, 0.9, 7)),
-                   energies=np.geomspace(100, 5000, 100) * u.keV)
+    psr = make_psr(data, sc_history, res=0.3, epsilon_nodes=np.linspace(-0.9, 0.9, 7),
+                   energy_nodes=np.geomspace(100, 5000, 100) * u.keV)
     psr.set_source(source)
 
     density = psr.expectation_density()
@@ -128,11 +128,11 @@ def test_narrow_line(data, sc_history, energy_m):
     source = PointSource('src', l=0, b=0, spectral_shape=spectrum)
 
     # With a coarse grid the 1 keV wide line falls between nodes
-    psr = make_psr(data, sc_history, energies=np.linspace(1790, 1830, 3) * u.keV)
+    psr = make_psr(data, sc_history, energy_nodes=np.linspace(1790, 1830, 3) * u.keV)
     psr.set_source(source)
     coarse = psr.expected_counts()
 
-    psr = make_psr(data, sc_history, energies=np.linspace(1790, 1830, 401) * u.keV)
+    psr = make_psr(data, sc_history, energy_nodes=np.linspace(1790, 1830, 401) * u.keV)
     psr.set_source(source)
 
     nexp = LIVETIME * AEFF * 1e-3
@@ -148,7 +148,7 @@ def test_dirac_delta_line(data, sc_history, energy_m):
     spectrum = DiracDelta(value=1e-3, zero_point=1808.)
     source = PointSource('src', l=0, b=0, spectral_shape=spectrum)
 
-    psr = make_psr(data, sc_history, line_energies=[1808.] * u.keV)
+    psr = make_psr(data, sc_history, mono_nodes=[1808.] * u.keV)
     psr.set_source(source)
 
     assert psr.expected_counts() == pytest.approx(LIVETIME * AEFF * 1e-3)
@@ -160,7 +160,7 @@ def test_dirac_delta_line(data, sc_history, energy_m):
 
 
 def test_event_nodes_follow_epsilon(data, sc_history):
-    psr = make_psr(data, sc_history, energies=np.geomspace(100, 5000, 5) * u.keV)
+    psr = make_psr(data, sc_history, energy_nodes=np.geomspace(100, 5000, 5) * u.keV)
 
     nodes, weights = psr._event_nodes(np.array([1000., 5000.]))
 
@@ -187,12 +187,12 @@ def test_integration_nodes_lines_and_epsilon():
     nodes = UnbinnedThreeMLPointSourceResponseTrapz.integration_nodes(source, ToyIRF(), [100, 5000] * u.keV,
                                                                       epsilon_range=(-0.1, 0.1))
 
-    np.testing.assert_allclose(nodes['line_energies'].to_value(u.keV), [511.])
-    assert nodes['energies'].min() == 100 * u.keV and nodes['energies'].max() == 5000 * u.keV
-    assert 511 * u.keV not in nodes['energies']
+    np.testing.assert_allclose(nodes['mono_nodes'].to_value(u.keV), [511.])
+    assert nodes['energy_nodes'].min() == 100 * u.keV and nodes['energy_nodes'].max() == 5000 * u.keV
+    assert 511 * u.keV not in nodes['energy_nodes']
 
     # Epsilon nodes span the range and concentrate within the energy resolution
-    eps = nodes['epsilon_axis']
+    eps = nodes['epsilon_nodes']
     assert eps[0] == -0.1 and eps[-1] == 0.1
     assert np.sum(np.abs(eps) < 3 * RES) > np.sum(np.abs(eps) > 3 * RES)
 
@@ -202,10 +202,12 @@ def test_integration_nodes_lines_and_epsilon():
                                                                   estimate_epsilon=False)
 
     irf = ToyIRF()
-    irf.epsilon_axis = Axis(np.linspace(-0.1, 0.1, 41))
+    irf.axes = Axes([Axis(np.linspace(-0.1, 0.1, 41), label='Epsilon')])
     nodes = UnbinnedThreeMLPointSourceResponseTrapz.integration_nodes(source, irf, [100, 5000] * u.keV,
                                                                       estimate_epsilon=False)
-    assert nodes['epsilon_axis'] is irf.epsilon_axis
+    epsilon_axis = irf.axes['Epsilon']
+    np.testing.assert_allclose(nodes['epsilon_nodes'],
+                               np.concatenate([[-0.1], epsilon_axis.centers, [0.1]]))
 
     spectrum.zero_point_2.free = True
     with pytest.raises(ValueError):
@@ -226,7 +228,7 @@ def test_integration_nodes_parameter_range():
     assert spectrum.mu.value == 1805. and spectrum.sigma.value == 3.
 
     # A 0.5 keV wide line can be anywhere within [1800, 1820]
-    e = nodes['energies'].to_value(u.keV)
+    e = nodes['energy_nodes'].to_value(u.keV)
     inside = (e >= 1800) & (e <= 1820)
     assert np.diff(e[inside]).max() < 0.5
 
@@ -234,7 +236,7 @@ def test_integration_nodes_parameter_range():
     spectrum.sigma.free = False
     nodes_fixed = UnbinnedThreeMLPointSourceResponseTrapz.integration_nodes(spectrum, ToyIRF(), energy_range,
                                                                             epsilon_range=(-0.1, 0.1))
-    assert nodes_fixed['energies'].size < e.size / 2
+    assert nodes_fixed['energy_nodes'].size < e.size / 2
 
 
 @pytest.mark.parametrize("spectrum, energy_range, res, eps_range",
