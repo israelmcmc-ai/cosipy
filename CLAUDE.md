@@ -205,8 +205,12 @@ if it's blocked, say so and validate with synthetic histograms.
   outside its axis instead of going to zero. `estimate_epsilon=False` uses the centers + outer
   edges of `irf.axes['Epsilon']` instead. On real data it lands well within 1% (max ~0.25%).
 - `IRFRelativeHistUnpolarized.axes` exposes the internal differential-response axes (unitless).
-- The full hist IRF files (9.6 GB) don't fit in a 15 GB sandbox (`from_h5` copies). Slicing the
-  `Ei` axis of the h5 with h5py (e.g. 916-5000 keV for Al-26) is enough for line validation.
+
+## Validating on real files in a sandbox
+
+- The full hist IRF files (9.6 GB) don't fit in a 15 GB sandbox (`from_h5` doesn't pass
+  `copy=False`, so it holds two copies). Slicing the `Ei` axis of the h5 with h5py (e.g.
+  916-5000 keV for Al-26) is enough for line validation.
 
 ## histpy gotchas
 
