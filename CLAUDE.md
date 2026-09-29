@@ -27,6 +27,24 @@ relative-coordinates histogram IRF (`IRFRelativeHistUnpolarized`).
   get reverted. Verify a change actually moves the needle before adding
   complexity.
 
+## Python version for the tests
+
+- cosipy requires Python >= 3.12 (`pyproject.toml`), but the sandbox's default
+  `python` may be 3.11. There, `isinstance()` against the
+  `@runtime_checkable` protocols in `cosipy/interfaces` evaluates properties
+  (e.g. `EventDataInterface.nevents`), so 12 tests in `tests/event_selection/`
+  fail with `TypeError: iter() returned non-iterator of type 'NoneType'`.
+  They pass on 3.12; this is not a real failure.
+- Run the tests in a 3.12 venv. `uv` also builds `antlr4-python3-runtime`
+  fine, so the full install (astromodels/threeML included) works and the
+  stub loader below is only a fallback:
+
+  ```bash
+  uv venv -p 3.12 $SCRATCH/venv312
+  VIRTUAL_ENV=$SCRATCH/venv312 uv pip install -e . pytest
+  $SCRATCH/venv312/bin/python -m pytest tests/event_selection/
+  ```
+
 ## Running the tests in a sandbox without astromodels
 
 `import cosipy` pulls in `astromodels`/`threeML` (via
