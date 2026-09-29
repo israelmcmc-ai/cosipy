@@ -213,7 +213,7 @@ class UnbinnedThreeMLPointSourceResponseTrapz(UnbinnedThreeMLSourceResponseInter
         - Off-axis angles of 0, 30 and 60 deg, which span most of the
           field of view, at a single azimuth.
         - Compton scattering angles of 10, 30, 60, 90 and 120 deg, since
-          the dispersion (e.g. the escape tail) depends on it.
+          the dispersion depends on it.
         - The scattered direction is on the Compton cone (ARM = 0),
           where the response peaks.
 
@@ -408,7 +408,8 @@ class UnbinnedThreeMLPointSourceResponseTrapz(UnbinnedThreeMLSourceResponseInter
     def _avoid_mono_nodes(self, energies_keV):
         """
         Shift continuum nodes that coincide exactly with a mono node by
-        one ULP, so the spectrum there doesn't include the Dirac delta.
+        one ULP ("unit in the last place", next number within sigfigs),
+        so the spectrum there doesn't include the Dirac delta.
         """
         return np.where(np.isin(energies_keV, self._line_energies_keV),
                         np.nextafter(energies_keV, np.inf), energies_keV)
