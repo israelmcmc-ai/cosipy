@@ -33,3 +33,11 @@ Slice choices (`E_SLICES`, `PHI_SLICES`, `SLICE_DIRS`, `DISK_RADIUS`) are at the
 `figures_dist1cm/` has the same plots after requiring the event `Distance` column >= 1 cm
 (`python bin_dc4.py ... week1_hist_d1cm.npz 32 1.0`). This keeps 57% of the week-1 events
 (27% in the 100-158 keV bin, about 75% above 1 MeV).
+
+## Earth frame split by survey mode (`figures_survey_modes/`, `figures_survey_modes_dist1cm/`)
+The z-axis tilt from the Earth zenith is bimodal: +22 deg towards North ("survey north") or -22 deg
+("survey south"), switching every ~12 h with ~8 min slews. `bin_dc4.py` labels each event from the
+orientation file (|tilt| > 20 deg; slews, ~1% of events, are in neither mode) and writes
+`earth_north` / `earth_south` histograms. `plot_dc4.py` then makes `psichi_maps_earth_survey_{north,south}.png`
+with the spacecraft equator (great circle 90 deg from the z axis) overlaid in red, and
+`energy_vs_phi_earth_by_mode.png`. The `_dist1cm` directory also applies Distance >= 1 cm.

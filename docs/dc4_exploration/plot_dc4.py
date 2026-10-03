@@ -99,7 +99,27 @@ def overview(hist, nside, outdir, fwhm):
     plt.close(fig)
 
 
-def plot_maps(hist, key, e_edges, phi_edges, nside, outdir, fwhm):
+def great_circle_xy(zaz, zalt, right, n=1441):
+    """Plot coordinates of the great circle 90 deg from the direction (zaz, zalt) [deg]
+    (the spacecraft equator when (zaz, zalt) is the z axis), sorted in longitude."""
+    zv = vec_lonlat(zaz, zalt)
+    a = np.cross(zv, [0, 0, 1.0]); a /= np.linalg.norm(a)
+    b = np.cross(zv, a)
+    ang = np.linspace(0, 2 * np.pi, n)
+    pts = np.cos(ang)[:, None] * a + np.sin(ang)[:, None] * b
+    lon = np.arctan2(pts[:, 1], pts[:, 0]); lat = np.arcsin(pts[:, 2])
+    x = lon if right else -lon
+    o = np.argsort(x)
+    return x[o], lat[o]
+
+
+def vec_lonlat(lon_deg, lat_deg):
+    lo, la = np.deg2rad(lon_deg), np.deg2rad(lat_deg)
+    return np.array([np.cos(la) * np.cos(lo), np.cos(la) * np.sin(lo), np.sin(la)])
+
+
+def plot_maps(hist, key, e_edges, phi_edges, nside, outdir, fwhm, tag='', equator=None, label=''):
+    """equator: optional (az, alt) [deg] of the spacecraft z axis; its equator is overlaid."""
     title, _, _, right = FRAMES[key]
     h = hist[key]
     nr, nc = len(E_SLICES), len(PHI_SLICES)
@@ -109,15 +129,17 @@ def plot_maps(hist, key, e_edges, phi_edges, nside, outdir, fwhm):
             ax = fig.add_subplot(nr, nc, r * nc + c + 1, projection='mollweide')
             m = smooth(h[e0:e1, p0:p1].sum(axis=(0, 1)), fwhm)
             mesh = render_map(ax, m, right, vmin=0, vmax=np.percentile(m, 99.7))
+            if equator is not None:
+                ax.plot(*great_circle_xy(*equator, right), color='r', lw=0.9, ls='--')
             fig.colorbar(mesh, ax=ax, orientation='horizontal', pad=0.04, shrink=0.8, fraction=0.05).ax.tick_params(labelsize=6)
             if r == 0:
                 ax.set_title(f'φ = {np.rad2deg(phi_edges[p0]):.0f}–{np.rad2deg(phi_edges[p1]):.0f}°', fontsize=10)
             if c == 0:
                 ax.set_ylabel(f'{e_edges[e0]:.0f}–{e_edges[e1]:.0f} keV', fontsize=10, labelpad=14)
     sm = f', Gaussian-smoothed (FWHM {fwhm:g}°)' if fwhm else ''
-    fig.suptitle(f'{title} frame: ψχ maps per energy (rows) and φ (columns) slice{sm}{CUT}', y=0.995)
+    fig.suptitle(f'{title} frame: ψχ maps per energy (rows) and φ (columns) slice{sm}{CUT}' + (f'\n{label}' if label else ''), y=1.0)
     fig.tight_layout()
-    fig.savefig(os.path.join(outdir, f'psichi_maps_{key}.png'), dpi=90, bbox_inches='tight')
+    fig.savefig(os.path.join(outdir, f'psichi_maps_{key}{tag}.png'), dpi=90, bbox_inches='tight')
     plt.close(fig)
 
 
@@ -143,6 +165,26 @@ def plot_e_phi(hist, key, e_edges, phi_edges, nside, outdir):
     plt.close(fig)
 
 
+def plot_e_phi_modes(modes, nside, e_edges, phi_edges, outdir):
+    """modes: list of (label, Earth-frame histogram) -> one row of disks per mode."""
+    dirs = SLICE_DIRS['earth']
+    fig, axs = plt.subplots(len(modes), len(dirs), figsize=(4.6 * len(dirs), 4.0 * len(modes)), squeeze=False)
+    for r, (label, h) in enumerate(modes):
+        for ax, (name, lo, la) in zip(axs[r], dirs):
+            img = h[:, :, disk_mask(nside, lo, la, DISK_RADIUS)].sum(axis=2).astype(float)
+            mesh = ax.pcolormesh(np.rad2deg(phi_edges), e_edges, img, cmap='viridis',
+                                 norm=LogNorm(vmin=max(img[img > 0].min(), 1), vmax=img.max()), rasterized=True)
+            ax.set_yscale('log')
+            ax.set_xlabel('Compton scattering angle φ [deg]')
+            ax.set_title(f'{label}: {name}\n({lo:g}°, {la:g}°), r<{DISK_RADIUS:g}°, N={int(img.sum()):,}', fontsize=9)
+            fig.colorbar(mesh, ax=ax, label='counts')
+        axs[r, 0].set_ylabel('Measured energy [keV]')
+    fig.suptitle(f'Earth horizon frame: energy vs φ for ψχ slices (disks), by survey mode{CUT}', y=1.0)
+    fig.tight_layout()
+    fig.savefig(os.path.join(outdir, 'energy_vs_phi_earth_by_mode.png'), dpi=110, bbox_inches='tight')
+    plt.close(fig)
+
+
 def main(npz, outdir, fwhm=4.0):
     global CUT
     os.makedirs(outdir, exist_ok=True)
@@ -155,6 +197,17 @@ def main(npz, outdir, fwhm=4.0):
     for key in FRAMES:
         plot_maps(hist, key, z['e_edges'], z['phi_edges'], nside, outdir, fwhm)
         plot_e_phi(hist, key, z['e_edges'], z['phi_edges'], nside, outdir)
+    if 'earth_north' in z:
+        modes = []
+        for name in ('north', 'south'):
+            zd = tuple(z[f'zdir_{name}'])
+            lab = (f'Survey {name} (z axis at az={zd[0]:.0f}°, alt={zd[1]:.0f}°; '
+                   'red dashed = spacecraft equator)')
+            h = z[f'earth_{name}']
+            plot_maps({'earth': h}, 'earth', z['e_edges'], z['phi_edges'], nside, outdir, fwhm,
+                      tag=f'_survey_{name}', equator=zd, label=lab)
+            modes.append((f'Survey {name}', h))
+        plot_e_phi_modes(modes, nside, z['e_edges'], z['phi_edges'], outdir)
 
 
 if __name__ == '__main__':

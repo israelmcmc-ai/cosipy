@@ -14,6 +14,10 @@ pixel), saved to an .npz file.
 
 Usage: python bin_dc4.py events.fits.gz orientation.fits out.npz [nside] [min_distance_cm]
 
+Also writes earth_north / earth_south histograms: Earth-frame events split by
+survey mode (z-axis tilted > 20 deg north / south of the Earth zenith, from the
+orientation file; slews are excluded), and the mean z-axis (az, alt) of each mode.
+
 min_distance_cm keeps only events whose 'Distance' (between the first and
 second hit) is >= this value (default 0 = no cut).
 """
@@ -54,18 +58,39 @@ def zenith_at(t, ori_t, ori_zen):
     return z / np.linalg.norm(z, axis=1, keepdims=True)
 
 
+TILT_MIN = 20.0   # deg: |tilt of z from Earth zenith| above this = survey mode
+
+
+def survey_modes(ori_t, ori_zen, ori_z):
+    """Per orientation sample: +1 survey north (z tilted ~+22 deg towards North),
+    -1 survey south, 0 slewing. Also returns the mean z-axis (az, alt) [deg] of each mode."""
+    north = POLE[None, :] - (ori_zen @ POLE)[:, None] * ori_zen
+    north /= np.linalg.norm(north, axis=1, keepdims=True)
+    east = np.cross(north, ori_zen)
+    tilt = np.rad2deg(np.arcsin(np.clip((ori_z * north).sum(1), -1, 1)))
+    mode = np.where(tilt > TILT_MIN, 1, np.where(tilt < -TILT_MIN, -1, 0))
+    zdir = {}
+    for m, name in ((1, 'north'), (-1, 'south')):
+        zz = np.stack([(ori_z * north).sum(1), (ori_z * east).sum(1), (ori_z * ori_zen).sum(1)], 1)[mode == m].mean(0)
+        zz /= np.linalg.norm(zz)
+        zdir[name] = np.array([np.rad2deg(np.arctan2(zz[1], zz[0])) % 360, np.rad2deg(np.arcsin(zz[2]))])
+    return mode, zdir
+
+
 def main(evfile, orifile, out, nside=32, min_dist=0.0):
     npix = hp.nside2npix(nside)
     ori = fits.open(orifile)[1].data
     ori_t = np.asarray(ori['TimeStamp'])
     ori_zen = vec(*np.deg2rad(np.asarray(ori['EarthZenith']).T))
     assert np.allclose(np.diff(ori_t), ORI_DT)
+    ori_z = vec(*np.deg2rad(np.asarray(ori['ZPointings']).T))
+    ori_mode, zdir = survey_modes(ori_t, ori_zen, ori_z)
 
     d = fits.open(evfile, memmap=False)[1].data
     n = len(d)
     shape = (len(E_EDGES) - 1, len(PHI_EDGES) - 1, npix)
     hists = {k: np.zeros(shape, dtype=np.int64)
-             for k in ('galactic', 'spacecraft', 'earth')}
+             for k in ('galactic', 'spacecraft', 'earth', 'earth_north', 'earth_south')}
     lo = lambda a: np.asarray(a)
 
     for s in range(0, n, CHUNK):
@@ -94,12 +119,16 @@ def main(evfile, orifile, out, nside=32, min_dist=0.0):
         az = np.mod(np.arctan2((v * east).sum(1), (v * north).sum(1)), 2 * np.pi)
         pix_ea = hp.ang2pix(nside, np.pi / 2 - alt, az)
 
-        for name, pix in (('galactic', pix_gal), ('spacecraft', pix_sc), ('earth', pix_ea)):
-            flat = (ie[ok] * shape[1] + ip[ok]) * npix + pix[ok]
+        mode = ori_mode[np.clip(np.floor((t - ori_t[0]) / ORI_DT).astype(int), 0, len(ori_t) - 1)]
+        for name, pix, sel in (('galactic', pix_gal, ok), ('spacecraft', pix_sc, ok), ('earth', pix_ea, ok),
+                               ('earth_north', pix_ea, ok & (mode == 1)),
+                               ('earth_south', pix_ea, ok & (mode == -1))):
+            flat = (ie[sel] * shape[1] + ip[sel]) * npix + pix[sel]
             hists[name] += np.bincount(flat, minlength=np.prod(shape)).reshape(shape)
         print(f'{sl.stop}/{n}', flush=True)
 
-    np.savez_compressed(out, e_edges=E_EDGES, phi_edges=PHI_EDGES, nside=nside, min_dist=min_dist, n_events=n, **hists)
+    np.savez_compressed(out, e_edges=E_EDGES, phi_edges=PHI_EDGES, nside=nside, min_dist=min_dist, n_events=n,
+             zdir_north=zdir['north'], zdir_south=zdir['south'], **hists)
 
 
 if __name__ == '__main__':
