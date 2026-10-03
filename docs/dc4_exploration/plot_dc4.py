@@ -128,7 +128,10 @@ def plot_maps(hist, key, e_edges, phi_edges, nside, outdir, fwhm, tag='', equato
         for c, (p0, p1) in enumerate(PHI_SLICES):
             ax = fig.add_subplot(nr, nc, r * nc + c + 1, projection='mollweide')
             m = smooth(h[e0:e1, p0:p1].sum(axis=(0, 1)), fwhm)
-            mesh = render_map(ax, m, right, vmin=0, vmax=np.percentile(m, 99.7))
+            vmax = np.percentile(m, 99.7)
+            mesh = render_map(ax, m, right, vmin=0, vmax=vmax if vmax > 1e-9 else 1)
+            if vmax <= 1e-9:
+                ax.text(0, 0, 'no events', ha='center', va='center', color='w', fontsize=9)
             if equator is not None:
                 ax.plot(*great_circle_xy(*equator, right), color='r', lw=0.9, ls='--')
             fig.colorbar(mesh, ax=ax, orientation='horizontal', pad=0.04, shrink=0.8, fraction=0.05).ax.tick_params(labelsize=6)

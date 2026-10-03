@@ -41,3 +41,7 @@ orientation file (|tilt| > 20 deg; slews, ~1% of events, are in neither mode) an
 `earth_north` / `earth_south` histograms. `plot_dc4.py` then makes `psichi_maps_earth_survey_{north,south}.png`
 with the spacecraft equator (great circle 90 deg from the z axis) overlaid in red, and
 `energy_vs_phi_earth_by_mode.png`. The `_dist1cm` directory also applies Distance >= 1 cm.
+
+## Spacecraft psichi matrix for Distance >= 8 cm (`figures_dist8cm/`)
+`python bin_dc4.py ... week1_d8.npz 32 8`. Only 4.3% of week-1 events (600k) survive; the 100-158 keV
+bin has 23k and the top bin 410 events, so the highest-energy panels are essentially noise.
