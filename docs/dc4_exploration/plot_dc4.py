@@ -17,6 +17,8 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from matplotlib.colors import LogNorm
 
+CUT = ''   # title suffix describing the event selection
+
 FRAMES = {
     # name: (long title, lon label, lat label, longitude increases to the right?)
     'galactic':   ('Galactic', 'l', 'b', False),
@@ -91,7 +93,7 @@ def overview(hist, nside, outdir, fwhm):
             ax.plot(xs, ys, 'o', mfc='none', mec='r', ms=8)
             ax.annotate(name, (xs, ys), color='w', fontsize=7, ha='center', va='bottom',
                         xytext=(0, 6), textcoords='offset points')
-        ax.set_title(f'{title}: all events, ∑E ∑φ', fontsize=10)
+        ax.set_title(f'{title}: all events{CUT}, ∑E ∑φ', fontsize=10)
         fig.colorbar(mesh, ax=ax, orientation='horizontal', pad=0.08, shrink=0.8, label='counts / pixel')
     fig.savefig(os.path.join(outdir, 'overview_psichi.png'), dpi=110, bbox_inches='tight')
     plt.close(fig)
@@ -113,7 +115,7 @@ def plot_maps(hist, key, e_edges, phi_edges, nside, outdir, fwhm):
             if c == 0:
                 ax.set_ylabel(f'{e_edges[e0]:.0f}–{e_edges[e1]:.0f} keV', fontsize=10, labelpad=14)
     sm = f', Gaussian-smoothed (FWHM {fwhm:g}°)' if fwhm else ''
-    fig.suptitle(f'{title} frame: ψχ maps per energy (rows) and φ (columns) slice{sm}', y=0.995)
+    fig.suptitle(f'{title} frame: ψχ maps per energy (rows) and φ (columns) slice{sm}{CUT}', y=0.995)
     fig.tight_layout()
     fig.savefig(os.path.join(outdir, f'psichi_maps_{key}.png'), dpi=90, bbox_inches='tight')
     plt.close(fig)
@@ -135,15 +137,18 @@ def plot_e_phi(hist, key, e_edges, phi_edges, nside, outdir):
         ax.set_title(f'{name}\n({lo:g}°, {la:g}°), r<{DISK_RADIUS:g}°, N={int(img.sum()):,}', fontsize=9)
         fig.colorbar(mesh, ax=ax, label='counts')
     axs[0, 0].set_ylabel('Measured energy [keV]')
-    fig.suptitle(f'{title} frame: energy vs φ for ψχ slices (disks)', y=1.02)
+    fig.suptitle(f'{title} frame: energy vs φ for ψχ slices (disks){CUT}', y=1.02)
     fig.tight_layout()
     fig.savefig(os.path.join(outdir, f'energy_vs_phi_{key}.png'), dpi=110, bbox_inches='tight')
     plt.close(fig)
 
 
 def main(npz, outdir, fwhm=4.0):
+    global CUT
     os.makedirs(outdir, exist_ok=True)
     z = np.load(npz)
+    md = float(z['min_dist']) if 'min_dist' in z else 0.0
+    CUT = f' [Distance ≥ {md:g} cm]' if md > 0 else ''
     hist = {k: z[k] for k in FRAMES}
     nside = int(z['nside'])
     overview(hist, nside, outdir, fwhm)

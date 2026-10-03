@@ -12,7 +12,10 @@ Frames for the psichi direction (direction of the scattered gamma ray):
 The result is a dense histogram per frame with axes (energy, phi, HEALPix
 pixel), saved to an .npz file.
 
-Usage: python bin_dc4.py events.fits.gz orientation.fits out.npz [nside]
+Usage: python bin_dc4.py events.fits.gz orientation.fits out.npz [nside] [min_distance_cm]
+
+min_distance_cm keeps only events whose 'Distance' (between the first and
+second hit) is >= this value (default 0 = no cut).
 """
 import sys
 import numpy as np
@@ -51,7 +54,7 @@ def zenith_at(t, ori_t, ori_zen):
     return z / np.linalg.norm(z, axis=1, keepdims=True)
 
 
-def main(evfile, orifile, out, nside=32):
+def main(evfile, orifile, out, nside=32, min_dist=0.0):
     npix = hp.nside2npix(nside)
     ori = fits.open(orifile)[1].data
     ori_t = np.asarray(ori['TimeStamp'])
@@ -71,6 +74,7 @@ def main(evfile, orifile, out, nside=32):
         ie = np.digitize(E, E_EDGES) - 1
         ip = np.digitize(phi, PHI_EDGES) - 1
         ok = (ie >= 0) & (ie < shape[0]) & (ip >= 0) & (ip < shape[1])
+        ok &= lo(d['Distance'][sl]) >= min_dist
 
         chi = lo(d['Chi local'][sl]); psi = lo(d['Psi local'][sl])
         l = np.deg2rad(lo(d['Chi galactic'][sl])); b = np.deg2rad(lo(d['Psi galactic'][sl]))
@@ -95,8 +99,10 @@ def main(evfile, orifile, out, nside=32):
             hists[name] += np.bincount(flat, minlength=np.prod(shape)).reshape(shape)
         print(f'{sl.stop}/{n}', flush=True)
 
-    np.savez_compressed(out, e_edges=E_EDGES, phi_edges=PHI_EDGES, nside=nside, **hists)
+    np.savez_compressed(out, e_edges=E_EDGES, phi_edges=PHI_EDGES, nside=nside, min_dist=min_dist, n_events=n, **hists)
 
 
 if __name__ == '__main__':
-    main(sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4]) if len(sys.argv) > 4 else 32)
+    main(sys.argv[1], sys.argv[2], sys.argv[3],
+         int(sys.argv[4]) if len(sys.argv) > 4 else 32,
+         float(sys.argv[5]) if len(sys.argv) > 5 else 0.0)
