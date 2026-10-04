@@ -49,6 +49,73 @@ def labels(s):
     return [f'{s.e[i]:.0f}–{s.e[i + 1]:.0f} keV' for i in range(len(s.e) - 1)]
 
 
+def optimized_arm(s, ie, dmin):
+    """Best S/sqrt(B) over the ARM half-width w = 0.25..30 deg for Distance >= dmin; returns (fom, w_best)."""
+    sel = s.d[:-1] >= dmin - 1e-9
+    cum = []
+    for H in (s.S, s.B):
+        c = H[ie][sel].sum(0)[1:-1]                    # central ARM bins, -30..30 deg
+        half = c[c.size // 2:] + c[:c.size // 2][::-1]  # |ARM| bins ordered outward from 0
+        cum.append(np.cumsum(half))
+    w = 0.25 * (np.arange(len(cum[0])) + 1)
+    with np.errstate(divide='ignore', invalid='ignore'):
+        f = cum[0] / np.sqrt(cum[1])
+    k = np.nanargmax(f)
+    return f[k], w[k]
+
+
+def removed_fraction_plot(s, outdir):
+    nE = len(s.e) - 1
+    lab = labels(s)
+    cols = plt.cm.viridis(np.linspace(0, 0.9, nE))
+    dgrid = s.d[:-1][s.d[:-1] <= 10.0]
+    fig, axs = plt.subplots(1, 3, figsize=(19, 5.2))
+    tot0 = np.sqrt(sum(optimized_arm(s, i, 0)[0] ** 2 for i in range(nE)))
+    comb, comb_x = [], []
+    for i in range(nE):
+        f0 = optimized_arm(s, i, 0)[0]
+        n0 = s.S[i].sum() + s.B[i].sum()
+        res = [optimized_arm(s, i, d) for d in dgrid]
+        removed = np.array([1 - (s.S[i][s.d[:-1] >= d].sum() + s.B[i][s.d[:-1] >= d].sum()) / n0 for d in dgrid])
+        gain = np.array([100 * (r[0] / f0 - 1) for r in res])
+        axs[0].plot(removed, gain, color=cols[i], label=lab[i])
+        axs[1].plot(removed, gain, color=cols[i], label=lab[i])
+        axs[2].plot(removed, [r[1] for r in res], color=cols[i], label=lab[i])
+        for d in (1, 2, 5):
+            k = int(np.argmin(np.abs(dgrid - d)))
+            axs[1].plot(removed[k], gain[k], 'o', color=cols[i], ms=4)
+            if i == 0:
+                axs[1].annotate(f'{d} cm', (removed[k], gain[k]), textcoords='offset points', xytext=(4, 4), fontsize=7)
+    # combined (quadrature of per-bin optimized values) vs the fraction removed over all bins
+    allS = s.S.sum(0); allB = s.B.sum(0); n0 = allS.sum() + allB.sum()
+    cg, cr = [], []
+    for d in dgrid:
+        tot = np.sqrt(sum(optimized_arm(s, i, d)[0] ** 2 for i in range(nE)))
+        cg.append(100 * (tot / tot0 - 1))
+        cr.append(1 - (allS[s.d[:-1] >= d].sum() + allB[s.d[:-1] >= d].sum()) / n0)
+    axs[0].plot(cr, cg, 'k--', label='all bins (quadrature)')
+    axs[0].axhline(0, color='k', lw=0.5); axs[1].axhline(0, color='k', lw=0.5)
+    axs[0].set_title('all bins')
+    axs[1].set_title('zoom (dots: 1, 2, 5 cm)'); axs[1].set_xlim(0, 0.45); axs[1].set_ylim(-35, 8)
+    axs[2].set_title('optimal ARM half-width')
+    for ax in axs:
+        ax.set_xlabel('fraction of events removed by the Distance cut (signal + background)')
+    axs[0].set_ylabel('change in S/√B [%] vs no Distance cut'); axs[1].set_ylabel('change in S/√B [%]')
+    axs[2].set_ylabel('optimal |ARM| < w [deg]'); axs[0].legend(fontsize=8)
+    fig.suptitle('Distance cut with the ARM window re-optimized at each cut (baseline: optimized ARM, no Distance cut)')
+    fig.tight_layout(); fig.savefig(os.path.join(outdir, 'sensitivity_vs_removed_fraction.png'), dpi=100); plt.close(fig)
+    # a few numbers for the summary
+    lines = []
+    for i in range(nE):
+        f0 = optimized_arm(s, i, 0)[0]
+        for d in (0.5, 1, 2, 5):
+            fd, wd = optimized_arm(s, i, d)
+            rem = 1 - (s.S[i][s.d[:-1] >= d].sum() + s.B[i][s.d[:-1] >= d].sum()) / (s.S[i].sum() + s.B[i].sum())
+            lines.append(f'{lab[i]} | Distance>={d:g} cm | removed {100 * rem:.0f}% | optimal w {wd:g} deg | S/sqrtB {100 * (fd / f0 - 1):+.1f}%')
+    open(os.path.join(outdir, 'summary_removed_fraction.txt'), 'w').write('\n'.join(lines) + '\n')
+    print('\n'.join(lines))
+
+
 def main(crab, bkg, outdir):
     os.makedirs(outdir, exist_ok=True)
     s = Sens(crab, bkg)
@@ -120,6 +187,8 @@ def main(crab, bkg, outdir):
     axs.flat[-1].axis('off')
     fig.suptitle('S/√B change vs Distance cut and ARM window (baseline: no cuts)')
     fig.tight_layout(); fig.savefig(os.path.join(outdir, 'sensitivity_distance_x_arm.png'), dpi=90); plt.close(fig)
+
+    removed_fraction_plot(s, outdir)
 
     # table
     with open(os.path.join(outdir, 'summary.txt'), 'w') as f:

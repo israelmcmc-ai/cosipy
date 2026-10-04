@@ -88,3 +88,7 @@ S/sqrt(B) relative to no cuts are meaningful. ARM = angle(Crab, scattered-photon
 Crab is above the Earth limb (zenith angle < 113 deg), as in the Crab simulation (76% of the in-range events).
 Pipeline: `sensitivity.py` (streams events -> (E, Distance, ARM) histograms in the .npz files, which are included) and
 `sensitivity_plots.py` (figures + `summary.txt`). Number of hits and first-hit z are not in the FITS files; pending a Crab file with hit info.
+
+`figures_sensitivity/sensitivity_vs_removed_fraction.png`: change in S/sqrt(B) from a Distance cut with the ARM half-width re-optimized
+(0.25-30 deg) at every cut and energy bin, relative to the optimized-ARM no-cut value, vs the fraction of (signal + background)
+events removed by the cut. `summary_removed_fraction.txt` lists the values at 0.5, 1, 2 and 5 cm.
