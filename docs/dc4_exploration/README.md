@@ -63,3 +63,10 @@ subtracted from the Earth map. The rotation code reproduces the axisymmetric mod
 std(residual)/sqrt(mean counts) in week 1 (1.0 = Poisson): above ~250 keV 1.0-1.1 (was 1.0-1.2 with the chi average);
 100-251 keV, phi 30-120 deg: 1.16-1.45 (was 1.4-1.7), so a broad excess remains there.
 Caveat: the SC template is built from the same events and still contains the roll-smeared Earth signal.
+
+## Albedo component only (`figures_albedo/`)
+Input: `COSI-SMEX/DC4/Data/Backgrounds/AlbedoPhotons_WithDetCstunbinned_data_filtered_with_SAAcut.fits.gz`
+(the "albedo" component of the DC4 background; albedo neutrons are a separate, much smaller file).
+It holds 27.1M events over the full 3 months (not time-ordered), all of which are binned (no Distance cut):
+`python bin_dc4.py AlbedoPhotons...fits ori15.fits albedo.npz 32 0; python plot_dc4.py albedo.npz outdir 4`.
+Figures: spacecraft-frame matrix and Earth-frame matrices for survey north / south (red dashed = SC equator).
