@@ -79,3 +79,12 @@ Figures: spacecraft-frame matrix and Earth-frame matrices for survey north / sou
   the mode's total SC map is rotated into the Earth frame per orientation sample first (slow: ~10 min for 3 months).
 - `narrow_phi_sc.py` -> `narrow_phi_sc_{raw,minus_total}.png`: SC frame, 1 deg phi bins (40, 70, 100, 130, 160 deg) for
   100-251, 251-631 and 631-1585 keV; nside 32 and 4 deg smoothing because the bins hold only 3k-80k events.
+
+## Sensitivity (S/sqrt(B)) vs Distance and ARM (`figures_sensitivity/`)
+Signal: `Sources/Crab_DC4_3months_...fits.gz` (3.84M events). Background: `Backgrounds/Total_DC4_BG_3months_..._withSAAbck.fits.gz`
+(168.6M events, streamed from Wasabi without a local copy). 6 log energy bins, 200 keV - 5 MeV. Only percentage changes of
+S/sqrt(B) relative to no cuts are meaningful. ARM = angle(Crab, scattered-photon direction) - phi, from the Galactic Chi/Psi columns
+(Crab peak at 0 +/- 0.4 deg, FWHM 11 deg at 200-342 keV down to 3 deg at 1.7-2.9 MeV). Background events are kept only when the
+Crab is above the Earth limb (zenith angle < 113 deg), as in the Crab simulation (76% of the in-range events).
+Pipeline: `sensitivity.py` (streams events -> (E, Distance, ARM) histograms in the .npz files, which are included) and
+`sensitivity_plots.py` (figures + `summary.txt`). Number of hits and first-hit z are not in the FITS files; pending a Crab file with hit info.
