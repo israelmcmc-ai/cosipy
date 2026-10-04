@@ -24,7 +24,7 @@ import plot_decouple as D
 from bin_dc4 import vec, POLE, survey_modes
 
 
-def rotation_models(z, ori, name, nside):
+def rotation_models(z, ori, name, nside, templates=None):
     """Earth-frame model maps for every (E, phi) slice of P.E_SLICES x P.PHI_SLICES."""
     ori_t = np.asarray(ori['TimeStamp'])
     zen = vec(*np.deg2rad(np.asarray(ori['EarthZenith']).T))
@@ -41,7 +41,8 @@ def rotation_models(z, ori, name, nside):
     H = np.array(hp.pix2vec(nside, np.arange(hp.nside2npix(nside)))).T   # (npix, 3) = (N, E, U)
 
     slices = [(e0, e1, p0, p1) for (e0, e1) in P.E_SLICES for (p0, p1) in P.PHI_SLICES]
-    S = {s: z[f'spacecraft_{name}'][s[0]:s[1], s[2]:s[3]].sum(axis=(0, 1)).astype(np.float32) for s in slices}
+    # spacecraft-frame template per slice: the mode's own SC map, or a user-supplied {slice: map}
+    S = templates or {s: z[f'spacecraft_{name}'][s[0]:s[1], s[2]:s[3]].sum(axis=(0, 1)).astype(np.float32) for s in slices}
     model = {s: np.zeros(len(H)) for s in slices}
     for c in range(0, len(ks), 400):
         k = ks[c:c + 400]

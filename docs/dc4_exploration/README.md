@@ -70,3 +70,12 @@ Input: `COSI-SMEX/DC4/Data/Backgrounds/AlbedoPhotons_WithDetCstunbinned_data_fil
 It holds 27.1M events over the full 3 months (not time-ordered), all of which are binned (no Distance cut):
 `python bin_dc4.py AlbedoPhotons...fits ori15.fits albedo.npz 32 0; python plot_dc4.py albedo.npz outdir 4`.
 Figures: spacecraft-frame matrix and Earth-frame matrices for survey north / south (red dashed = SC equator).
+
+### Albedo with Distance >= 1 cm (`figures_albedo_dist1cm/`)
+`bin_dc4.py AlbedoPhotons...fits ori15.fits albedo_d1.npz 32 1` keeps 18.9M of the 27.1M albedo events (70%).
+- `psichi_maps_spacecraft.png`, `psichi_maps_earth_survey_{north,south}.png`: plain matrices with the cut.
+- `plot_minus_total.py` -> `psichi_maps_spacecraft_minus_total.png` and `psichi_maps_earth_minus_total_sc_survey_{north,south}.png`:
+  each slice minus the component's total (sum over E and phi) SC-frame map scaled to the slice counts; for the Earth frame
+  the mode's total SC map is rotated into the Earth frame per orientation sample first (slow: ~10 min for 3 months).
+- `narrow_phi_sc.py` -> `narrow_phi_sc_{raw,minus_total}.png`: SC frame, 1 deg phi bins (40, 70, 100, 130, 160 deg) for
+  100-251, 251-631 and 631-1585 keV; nside 32 and 4 deg smoothing because the bins hold only 3k-80k events.
