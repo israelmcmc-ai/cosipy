@@ -94,6 +94,7 @@ def main(evfile, orifile, out, nside=32, min_dist=0.0):
              for k in ('galactic', 'spacecraft', 'earth', 'earth_north', 'earth_south',
                        'spacecraft_north', 'spacecraft_south')}
     lo = lambda a: np.asarray(a)
+    ori_counts = np.zeros(len(ori_t), dtype=np.int64)
 
     for s in range(0, n, CHUNK):
         sl = slice(s, min(s + CHUNK, n))
@@ -121,7 +122,9 @@ def main(evfile, orifile, out, nside=32, min_dist=0.0):
         az = np.mod(np.arctan2((v * east).sum(1), (v * north).sum(1)), 2 * np.pi)
         pix_ea = hp.ang2pix(nside, np.pi / 2 - alt, az)
 
-        mode = ori_mode[np.clip(np.floor((t - ori_t[0]) / ORI_DT).astype(int), 0, len(ori_t) - 1)]
+        oi = np.clip(np.floor((t - ori_t[0]) / ORI_DT).astype(int), 0, len(ori_t) - 1)
+        mode = ori_mode[oi]
+        ori_counts += np.bincount(oi[ok], minlength=len(ori_t))   # selected events per orientation sample
         for name, pix, sel in (('galactic', pix_gal, ok), ('spacecraft', pix_sc, ok), ('earth', pix_ea, ok),
                                ('earth_north', pix_ea, ok & (mode == 1)),
                                ('earth_south', pix_ea, ok & (mode == -1)),
@@ -132,7 +135,7 @@ def main(evfile, orifile, out, nside=32, min_dist=0.0):
         print(f'{sl.stop}/{n}', flush=True)
 
     np.savez_compressed(out, e_edges=E_EDGES, phi_edges=PHI_EDGES, nside=nside, min_dist=min_dist, n_events=n,
-             zdir_north=zdir['north'], zdir_south=zdir['south'], **hists)
+             ori_counts=ori_counts, zdir_north=zdir['north'], zdir_south=zdir['south'], **hists)
 
 
 if __name__ == '__main__':

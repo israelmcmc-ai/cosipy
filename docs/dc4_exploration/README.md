@@ -54,3 +54,12 @@ the mode's mean z axis, and subtracted from the Earth-frame map (counts/pixel, d
 Caveat: only the chi-symmetric SC part is removed. chi-dependent SC structure (e.g. the detector-geometry
 stripes) remains, and since the SC x axis oscillates between az ~ +/-72 deg once per orbit it shows up
 in the residual as azimuthal stripes.
+
+### Full (chi-dependent) spacecraft subtraction
+`plot_decouple_full.py hist.npz orientation.fits outdir` adds `psichi_maps_earth_minus_fullsc_survey_{north,south}.png`
+and `decoupling_full_example.png` to the same directories. For each survey mode the SC-frame map is rotated into
+the Earth frame with the attitude of every 15 s orientation sample (weighted by its event count) and summed, then
+subtracted from the Earth map. The rotation code reproduces the axisymmetric model to 0.2% when fed a chi-averaged map.
+std(residual)/sqrt(mean counts) in week 1 (1.0 = Poisson): above ~250 keV 1.0-1.1 (was 1.0-1.2 with the chi average);
+100-251 keV, phi 30-120 deg: 1.16-1.45 (was 1.4-1.7), so a broad excess remains there.
+Caveat: the SC template is built from the same events and still contains the roll-smeared Earth signal.

@@ -43,7 +43,9 @@ def earth_model(sc_map, zdir_azalt):
     return np.interp(psi, ring_theta, mean)
 
 
-def decouple_maps(h_earth, h_sc, zdir, e_edges, phi_edges, outdir, fwhm, name, cut):
+def decouple_maps(h_earth, h_sc, zdir, e_edges, phi_edges, outdir, fwhm, name, cut,
+                  model_fn=None, what='χ-averaged spacecraft map', fname='psichi_maps_earth_minus_sc_survey_'):
+    """model_fn(sc_slice_map, (e0, e1, p0, p1)) -> Earth-frame model; default = chi-average."""
     nr, nc = len(P.E_SLICES), len(P.PHI_SLICES)
     fig = plt.figure(figsize=(3.4 * nc, 2.1 * nr + 0.8))
     for r, (e0, e1) in enumerate(P.E_SLICES):
@@ -51,7 +53,8 @@ def decouple_maps(h_earth, h_sc, zdir, e_edges, phi_edges, outdir, fwhm, name, c
             ax = fig.add_subplot(nr, nc, r * nc + c + 1, projection='mollweide')
             earth = h_earth[e0:e1, p0:p1].sum(axis=(0, 1)).astype(float)
             sc = h_sc[e0:e1, p0:p1].sum(axis=(0, 1)).astype(float)
-            res = P.smooth(earth - earth_model(sc, zdir), fwhm)
+            mod = model_fn(sc, (e0, e1, p0, p1)) if model_fn else earth_model(sc, zdir)
+            res = P.smooth(earth - mod, fwhm)
             lim = np.percentile(np.abs(res), 99.5)
             if lim < 1e-9:
                 lim = 1
@@ -64,23 +67,24 @@ def decouple_maps(h_earth, h_sc, zdir, e_edges, phi_edges, outdir, fwhm, name, c
             if c == 0:
                 ax.set_ylabel(f'{e_edges[e0]:.0f}–{e_edges[e1]:.0f} keV', fontsize=10, labelpad=14)
     sm = f', Gaussian-smoothed (FWHM {fwhm:g}°)' if fwhm else ''
-    fig.suptitle(f'Survey {name}, Earth frame minus χ-averaged spacecraft map (counts/pixel){sm}{cut}', y=1.0)
+    fig.suptitle(f'Survey {name}, Earth frame minus {what} (counts/pixel){sm}{cut}', y=1.0)
     fig.tight_layout()
-    fig.savefig(os.path.join(outdir, f'psichi_maps_earth_minus_sc_survey_{name}.png'), dpi=90, bbox_inches='tight')
+    fig.savefig(os.path.join(outdir, f'{fname}{name}.png'), dpi=90, bbox_inches='tight')
     plt.close(fig)
 
 
-def example(z, fwhm, outdir, cut, e_sl=(2, 4), p_sl=(12, 18)):
+def example(z, fwhm, outdir, cut, e_sl=(2, 4), p_sl=(12, 18), models=None, what='χ-averaged SC map, in Earth frame',
+            fname='decoupling_example.png'):
     """Earth map | χ-averaged SC model | residual for one (energy, phi) slice, both modes."""
     fig = plt.figure(figsize=(16, 4.4 * 2))
     for r, name in enumerate(('north', 'south')):
         zd = tuple(z[f'zdir_{name}'])
         earth = z[f'earth_{name}'][e_sl[0]:e_sl[1], p_sl[0]:p_sl[1]].sum(axis=(0, 1)).astype(float)
         sc = z[f'spacecraft_{name}'][e_sl[0]:e_sl[1], p_sl[0]:p_sl[1]].sum(axis=(0, 1)).astype(float)
-        mod = earth_model(sc, zd)
+        mod = models[name][(e_sl[0], e_sl[1], p_sl[0], p_sl[1])] if models else earth_model(sc, zd)
         vmax = np.percentile(P.smooth(earth, fwhm), 99.7)
         panels = [('Earth frame', P.smooth(earth, fwhm), 'viridis', 0, vmax),
-                  ('χ-averaged SC map, in Earth frame', P.smooth(mod, fwhm), 'viridis', 0, vmax)]
+                  (what, P.smooth(mod, fwhm), 'viridis', 0, vmax)]
         res = P.smooth(earth - mod, fwhm); lim = np.percentile(np.abs(res), 99.5)
         panels.append(('difference', res, 'RdBu_r', -lim, lim))
         for c, (t, m, cm, lo, hi) in enumerate(panels):
@@ -93,7 +97,7 @@ def example(z, fwhm, outdir, cut, e_sl=(2, 4), p_sl=(12, 18)):
     fig.suptitle(f'{e0:.0f}–{e1:.0f} keV, φ = {np.rad2deg(z["phi_edges"][p_sl[0]]):.0f}–'
                  f'{np.rad2deg(z["phi_edges"][p_sl[1]]):.0f}° (dashed = spacecraft equator){cut}', y=1.0)
     fig.tight_layout()
-    fig.savefig(os.path.join(outdir, 'decoupling_example.png'), dpi=90, bbox_inches='tight')
+    fig.savefig(os.path.join(outdir, fname), dpi=90, bbox_inches='tight')
     plt.close(fig)
 
 
