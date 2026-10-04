@@ -14,7 +14,8 @@ pixel), saved to an .npz file.
 
 Usage: python bin_dc4.py events.fits.gz orientation.fits out.npz [nside] [min_distance_cm]
 
-Also writes earth_north / earth_south histograms: Earth-frame events split by
+Also writes earth_north / earth_south (and spacecraft_north / spacecraft_south)
+histograms: events split by
 survey mode (z-axis tilted > 20 deg north / south of the Earth zenith, from the
 orientation file; slews are excluded), and the mean z-axis (az, alt) of each mode.
 
@@ -90,7 +91,8 @@ def main(evfile, orifile, out, nside=32, min_dist=0.0):
     n = len(d)
     shape = (len(E_EDGES) - 1, len(PHI_EDGES) - 1, npix)
     hists = {k: np.zeros(shape, dtype=np.int64)
-             for k in ('galactic', 'spacecraft', 'earth', 'earth_north', 'earth_south')}
+             for k in ('galactic', 'spacecraft', 'earth', 'earth_north', 'earth_south',
+                       'spacecraft_north', 'spacecraft_south')}
     lo = lambda a: np.asarray(a)
 
     for s in range(0, n, CHUNK):
@@ -122,7 +124,9 @@ def main(evfile, orifile, out, nside=32, min_dist=0.0):
         mode = ori_mode[np.clip(np.floor((t - ori_t[0]) / ORI_DT).astype(int), 0, len(ori_t) - 1)]
         for name, pix, sel in (('galactic', pix_gal, ok), ('spacecraft', pix_sc, ok), ('earth', pix_ea, ok),
                                ('earth_north', pix_ea, ok & (mode == 1)),
-                               ('earth_south', pix_ea, ok & (mode == -1))):
+                               ('earth_south', pix_ea, ok & (mode == -1)),
+                               ('spacecraft_north', pix_sc, ok & (mode == 1)),
+                               ('spacecraft_south', pix_sc, ok & (mode == -1))):
             flat = (ie[sel] * shape[1] + ip[sel]) * npix + pix[sel]
             hists[name] += np.bincount(flat, minlength=np.prod(shape)).reshape(shape)
         print(f'{sl.stop}/{n}', flush=True)

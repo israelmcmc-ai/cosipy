@@ -45,3 +45,12 @@ with the spacecraft equator (great circle 90 deg from the z axis) overlaid in re
 ## Spacecraft psichi matrix for Distance >= 8 cm (`figures_dist8cm/`)
 `python bin_dc4.py ... week1_d8.npz 32 8`. Only 4.3% of week-1 events (600k) survive; the 100-158 keV
 bin has 23k and the top bin 410 events, so the highest-energy panels are essentially noise.
+
+## Earth-minus-spacecraft decoupling (`figures_earth_minus_sc/`, `figures_earth_minus_sc_dist1cm/`)
+`plot_decouple.py` (needs the `spacecraft_north/south` histograms from `bin_dc4.py`). Per survey mode:
+the SC-frame psichi map of that mode's events is averaged over chi, painted onto the Earth frame about
+the mode's mean z axis, and subtracted from the Earth-frame map (counts/pixel, diverging colormap).
+`decoupling_example.png` shows Earth map | chi-averaged SC model | difference for one slice.
+Caveat: only the chi-symmetric SC part is removed. chi-dependent SC structure (e.g. the detector-geometry
+stripes) remains, and since the SC x axis oscillates between az ~ +/-72 deg once per orbit it shows up
+in the residual as azimuthal stripes.
