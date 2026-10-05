@@ -12,7 +12,7 @@ Frames for the psichi direction (direction of the scattered gamma ray):
 The result is a dense histogram per frame with axes (energy, phi, HEALPix
 pixel), saved to an .npz file.
 
-Usage: python bin_dc4.py events.fits.gz orientation.fits out.npz [nside] [min_distance_cm]
+Usage: python bin_dc4.py events.fits[.gz]|- orientation.fits out.npz [nside] [min_distance_cm]
 
 Also writes earth_north / earth_south (and spacecraft_north / spacecraft_south)
 histograms: events split by
@@ -23,11 +23,13 @@ min_distance_cm keeps only events whose 'Distance' (between the first and
 second hit) is >= this value (default 0 = no cut).
 """
 import sys
+import gzip
 import numpy as np
 import healpy as hp
 from astropy.io import fits
 from astropy.coordinates import SkyCoord
 import astropy.units as u
+from sensitivity import stream_rows
 
 E_EDGES = np.geomspace(100., 10000., 11)        # keV, 10 log bins
 PHI_EDGES = np.deg2rad(np.arange(0., 180.001, 5.))  # 36 bins
@@ -87,25 +89,26 @@ def main(evfile, orifile, out, nside=32, min_dist=0.0):
     ori_z = vec(*np.deg2rad(np.asarray(ori['ZPointings']).T))
     ori_mode, zdir = survey_modes(ori_t, ori_zen, ori_z)
 
-    d = fits.open(evfile, memmap=False)[1].data
-    n = len(d)
     shape = (len(E_EDGES) - 1, len(PHI_EDGES) - 1, npix)
     hists = {k: np.zeros(shape, dtype=np.int64)
              for k in ('galactic', 'spacecraft', 'earth', 'earth_north', 'earth_south',
                        'spacecraft_north', 'spacecraft_south')}
-    lo = lambda a: np.asarray(a)
     ori_counts = np.zeros(len(ori_t), dtype=np.int64)
+    n = 0
 
-    for s in range(0, n, CHUNK):
-        sl = slice(s, min(s + CHUNK, n))
-        E = lo(d['Energies'][sl]); phi = lo(d['Phi'][sl]); t = lo(d['TimeTags'][sl])
+    # events are streamed (optionally gzipped, or '-' = gzipped FITS on stdin): no full copy in memory/disk
+    raw = sys.stdin.buffer if evfile == '-' else open(evfile, 'rb')
+    stream = gzip.GzipFile(fileobj=raw) if (evfile == '-' or evfile.endswith('.gz')) else raw
+    for c in stream_rows(stream):
+        E = c['E'].astype(float); phi = c['phi'].astype(float); t = c['t'].astype(float)
+        n += len(c)
         ie = np.digitize(E, E_EDGES) - 1
         ip = np.digitize(phi, PHI_EDGES) - 1
         ok = (ie >= 0) & (ie < shape[0]) & (ip >= 0) & (ip < shape[1])
-        ok &= lo(d['Distance'][sl]) >= min_dist
+        ok &= c['dist'] >= min_dist
 
-        chi = lo(d['Chi local'][sl]); psi = lo(d['Psi local'][sl])
-        l = np.deg2rad(lo(d['Chi galactic'][sl])); b = np.deg2rad(lo(d['Psi galactic'][sl]))
+        chi = c['chi'].astype(float); psi = c['psi'].astype(float)
+        l = np.deg2rad(c['l'].astype(float)); b = np.deg2rad(c['b'].astype(float))
 
         # spacecraft: lon = chi, lat = 90deg - psi
         pix_sc = hp.ang2pix(nside, np.clip(psi, 0, np.pi), chi)  # theta = psi (colatitude), phi = chi
@@ -132,7 +135,7 @@ def main(evfile, orifile, out, nside=32, min_dist=0.0):
                                ('spacecraft_south', pix_sc, ok & (mode == -1))):
             flat = (ie[sel] * shape[1] + ip[sel]) * npix + pix[sel]
             hists[name] += np.bincount(flat, minlength=np.prod(shape)).reshape(shape)
-        print(f'{sl.stop}/{n}', flush=True)
+        print(n, flush=True)
 
     np.savez_compressed(out, e_edges=E_EDGES, phi_edges=PHI_EDGES, nside=nside, min_dist=min_dist, n_events=n,
              ori_counts=ori_counts, zdir_north=zdir['north'], zdir_south=zdir['south'], **hists)
