@@ -287,11 +287,16 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
         irf /= axes.expand_dims(phase_space_em, axes.label_to_index(['Ei', 'Epsilon']))
 
         # Bins in the unphysical region of the CDS reparametrization (Phi +
-        # Theta outside [0, pi]) have zero phase space and zero contents,
-        # so the divisions above produce 0/0 = NaN there. Replace with the
-        # physically correct value of zero differential effective area, so
-        # these bins don't poison interpolation for nearby physical events.
-        irf[:] = np.nan_to_num(irf.contents, nan = 0.0)
+        # Theta outside [0, pi]) have zero phase space, so the divisions
+        # above produce 0/0 = NaN there if the contents are exactly zero,
+        # or +-inf if they are not (e.g. due to smoothing or interpolation
+        # when the histogram was built). Replace both with the physically
+        # correct value of zero differential effective area, so these bins
+        # don't poison interpolation for nearby physical events. Note that
+        # the default posinf/neginf of nan_to_num would instead turn inf
+        # into the largest finite float, which overflows to inf/NaN when
+        # interpolating.
+        irf[:] = np.nan_to_num(irf.contents, nan = 0.0, posinf = 0.0, neginf = 0.0)
 
         self._diff_aeff = irf
 

@@ -511,3 +511,26 @@ class TestEnergySelections:
 
         np.testing.assert_array_equal(np.asarray(model._tot_aeff.axes['Ei'].edges), orig_edges)
         np.testing.assert_allclose(model._tot_aeff.contents, 1.)
+
+
+class TestUnphysicalBins:
+    """Bins in the unphysical region of the CDS reparametrization (Phi + Theta
+    outside [0, pi]) have zero phase space. Non-zero contents there (e.g. from
+    smoothing) must not end up as huge/infinite differential effective area,
+    which overflows to inf/NaN during interpolation."""
+
+    def test_nonzero_contents_in_zero_phase_space_bins_are_zeroed(self):
+        model = IRFRelativeHistUnpolarized(_make_irf_hist())
+
+        diff_aeff = model._diff_aeff.contents
+
+        assert np.all(np.isfinite(diff_aeff))
+        # Random contents in [0, 1) divided by finite phase spaces stay moderate
+        assert diff_aeff.max() < 1e6
+
+    def test_differential_effective_area_is_finite(self):
+        model = IRFRelativeHistUnpolarized(_make_irf_hist())
+
+        photons, events = _make_photons_and_events(500)
+
+        assert np.all(np.isfinite(model._differential_effective_area_cm2(photons, events)))
