@@ -92,3 +92,12 @@ Pipeline: `sensitivity.py` (streams events -> (E, Distance, ARM) histograms in t
 `figures_sensitivity/sensitivity_vs_removed_fraction.png`: change in S/sqrt(B) from a Distance cut with the ARM half-width re-optimized
 (0.25-30 deg) at every cut and energy bin, relative to the optimized-ARM no-cut value, vs the fraction of (signal + background)
 events removed by the cut. `summary_removed_fraction.txt` lists the values at 0.5, 1, 2 and 5 cm.
+
+## Other background components, spacecraft frame only (`figures_backgrounds_sc_dist1cm/<component>/`)
+`run_components.sh outdir 1` streams each component from Wasabi and bins it with Distance >= 1 cm (11 components of the mock dataset:
+DC4 albedo neutrons, primary alphas / electrons / positrons / protons, SAA, secondary positrons / protons; DC3 secondary electrons,
+Galactic diffuse (`GalTotal_SA100_F98`) and cosmic photons; albedo photons is under `figures_albedo_dist1cm/`). `plot_sc_components.py bindir plotdir`
+then makes, per component, `psichi_maps_spacecraft.png` and `psichi_maps_spacecraft_minus_total.png` (no Earth-frame step; palette-quantized PNGs).
+Events in 200 keV-10 MeV x all phi after the cut (`plot_sc_components.py` output): cosmic photons 48.8M, primary protons 10.2M, primary alphas 5.5M,
+secondary positrons 4.2M, Galactic diffuse 4.2M, SAA 3.5M, albedo neutrons 1.2M, secondary electrons 0.77M, secondary protons 0.46M,
+primary electrons 26k, primary positrons 1.9k (the last two are noisy). (`plot_component.sh`/`plot_components.sh` also include the slow Earth-frame subtraction.)
