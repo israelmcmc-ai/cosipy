@@ -102,3 +102,12 @@ Loop over the plain matrices with the glob `psichi_maps_spacecraft_*.png` (12 fi
 Events in 200 keV-10 MeV x all phi after the cut (`plot_sc_components.py` output): cosmic photons 48.8M, primary protons 10.2M, primary alphas 5.5M,
 secondary positrons 4.2M, Galactic diffuse 4.2M, SAA 3.5M, albedo neutrons 1.2M, secondary electrons 0.77M, secondary protons 0.46M,
 primary electrons 26k, primary positrons 1.9k (the last two are noisy). (`plot_component.sh`/`plot_components.sh` also include the slow Earth-frame subtraction.)
+
+## Albedo, spacecraft frame, by survey mode and roll angle (`figures_albedo_roll_modes_dist1cm/`)
+`roll_modes.py` (streams the albedo file, Distance >= 1 cm) + `plot_roll_modes.py roll.npz outdir AlbedoPhotons`.
+Roll angle = angle, counterclockwise about SC +z, from +x to the projection of the Earth zenith onto the SC xy plane (the SC azimuth chi
+of the zenith), in 10 deg bins from -180 to 180. Survey north occupies roll |100-180| deg (zenith towards -x) and survey south -80..+80 deg
+(zenith towards +x); slews (1% of events) are excluded. One energy x phi matrix per occupied (mode, roll bin) with >= 20k events:
+`psichi_maps_spacecraft_AlbedoPhotons_survey_<north|south>_roll_<lo>to<hi>.png` (16 per mode), plus `roll_distribution_AlbedoPhotons.png`.
+Check: the first azimuthal Fourier mode of the -z-side emission (psi 120-155 deg) has phase = roll + 180 deg to within a few deg on average
+(std 4-17 deg), amplitude 2-9%, so the roll-dependent part is a modest modulation on top of the roll-independent SC pattern.
