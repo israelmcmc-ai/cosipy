@@ -125,3 +125,14 @@ the spike excess covers only ~45% of the dips' deficit, the rest is roughly bala
 conserved to a few % only over about +-13 deg. In bands of the hit separation (`lon_vs_dist.py`) the empty gap around each axis shrinks as 1/Distance:
 |offset| < ~3.3 deg for 1-2 cm, ~2.2 for 2-3, ~1.2 for 3-5, ~0.8 for 5-8 and ~0.3 deg for 8-30 cm, i.e. tan(gap) * Distance ~ 1.1 mm,
 the signature of quantized hit positions (events with a transverse offset below one position quantum are reconstructed exactly on the axis).
+
+## Hit positions (x, y, z), week 1, all background components (`figures_hit_positions/`)
+Hit-level positions exist only in the `.tra` files, so `run_hit_positions.sh` scans the `.tra` of every background component that has an
+`extracted.filtered.tra` (albedo photons / neutrons, cosmic photons, Galactic diffuse (`inc1.id1`), primary alphas / electrons / positrons / protons,
+secondary electrons / positrons / protons; the unfiltered `SAA_Andreas` tra is not included) and keeps the events with TI in week 1
+(1835487300 to +604800 s). Each `.tra` is a concatenation of increments that each span the whole 3 months, so the whole file has to be read.
+`hit_positions.py` histograms the `CH` hit lines (x, y, z of all hits, of the first hit `CH 0` and of the second hit `CH 1`; per-component
+histograms in `histograms/*.npz`) and `plot_hit_positions.py` draws `hit_positions_week1_all_components.png`: 15.3M events, 37.9M hits.
+x and y hits sit on a strip lattice (pitch 0.1164 cm, 64 strips per detector, 2 detectors per axis), so they are plotted as counts per strip
+(`hit_strip_lattice_zoom.png` shows the lattice; ~10% of the hits lie between strips). z shows 4 detector layers (12.26-13.77, 14.7-16.3,
+17.2-18.8, 19.7-21.45 cm) with spikes at the layer mid-planes (z = 13.01, 15.57, 18.13, 20.71 cm).
