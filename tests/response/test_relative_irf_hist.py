@@ -534,3 +534,32 @@ class TestUnphysicalBins:
         photons, events = _make_photons_and_events(500)
 
         assert np.all(np.isfinite(model._differential_effective_area_cm2(photons, events)))
+
+
+class TestZeroEffectiveArea:
+    """Where the total effective area is zero the event probability
+    (diff. area / area) must be zero, not NaN/inf, otherwise a few NaNs in
+    the per-event density break the likelihood fit."""
+
+    def test_event_probability_is_zero_where_effective_area_is_zero(self):
+        aeff = _make_aeff_hist()
+        aeff = Histogram(aeff.axes, contents=np.zeros(aeff.axes.nbins), unit=u.cm * u.cm)
+        model = IRFRelativeHistUnpolarized(_make_irf_hist(), aeff=aeff)
+
+        photons, events = _make_photons_and_events(200)
+
+        prob = np.asarray(model._event_probability(photons, events), dtype=float)
+
+        assert np.all(np.isfinite(prob))
+        assert np.all(prob == 0)
+
+    def test_event_probability_matches_ratio_where_effective_area_is_positive(self):
+        model = IRFRelativeHistUnpolarized(_make_irf_hist())
+
+        photons, events = _make_photons_and_events(200)
+
+        prob = np.asarray(model._event_probability(photons, events), dtype=float)
+        expected = (np.asarray(model._differential_effective_area_cm2(photons, events))
+                    / np.asarray(model._effective_area_cm2(photons)))
+
+        assert np.allclose(prob, expected)

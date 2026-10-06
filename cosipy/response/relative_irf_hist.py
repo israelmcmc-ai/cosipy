@@ -924,6 +924,21 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
                                       epsilon, phi_kin_rad, theta_rad, zeta_rad))
 
 
+    def _event_probability(self, photons: PhotonListWithDirectionAndEnergyInSCFrameInterface, events: EmCDSEventDataInSCFrameInterface) -> Iterable[float]:
+        """
+        Differential effective area divided by the total effective area.
+
+        Where the interpolated total effective area is zero (e.g. photon
+        energy or direction outside the region covered by the histogram)
+        the event is impossible, so the probability is zero. The default
+        implementation would give 0/0 = NaN or x/0 = inf there.
+        """
+
+        diff = np.asarray(self._differential_effective_area_cm2(photons, events), dtype=float)
+        aeff = np.asarray(self._effective_area_cm2(photons), dtype=float)
+
+        return np.divide(diff, aeff, out=np.zeros_like(diff), where=aeff > 0)
+
     def _random_events(self, photons: PhotonListWithDirectionInSCFrameInterface) -> EventDataInterface:
         """
         Not implemented yet; provided to satisfy the
