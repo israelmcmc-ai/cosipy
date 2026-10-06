@@ -111,3 +111,10 @@ of the zenith), in 10 deg bins from -180 to 180. Survey north occupies roll |100
 `psichi_maps_spacecraft_AlbedoPhotons_survey_<north|south>_roll_<lo>to<hi>.png` (16 per mode), plus `roll_distribution_AlbedoPhotons.png`.
 Check: the first azimuthal Fourier mode of the -z-side emission (psi 120-155 deg) has phase = roll + 180 deg to within a few deg on average
 (std 4-17 deg), amplitude 2-9%, so the roll-dependent part is a modest modulation on top of the roll-independent SC pattern.
+
+## Spacecraft-frame projections on SC latitude and SC longitude (`figures_dist1cm/psichi_spacecraft_vs_{latitude,longitude}_1deg.png`)
+Same week-1 data, Distance >= 1 cm, and energy x phi matrix as `figures_dist1cm/psichi_maps_spacecraft.png`, but each panel is a 1-D
+histogram in 1 deg bins with no smoothing (shaded band = +/- sqrt(N)): vs SC latitude (90 deg - psi, summed over longitude) and vs
+SC longitude (chi, summed over latitude). `sc_lonlat.py events.fits.gz out_prefix 1` (also keeps the 2-D 360 x 180 counts in the .npz).
+Counts per latitude bin include the cos(lat) solid-angle factor. Features: a 1-2 deg wide spike at latitude 0 (psi = 90 deg, scatters in the
+detector plane) and sharp spikes/dips at longitudes 0, 90, 180, 270 deg plus finer structure at the 1 deg scale (detector geometry).
