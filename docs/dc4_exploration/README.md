@@ -118,3 +118,10 @@ histogram in 1 deg bins with no smoothing (shaded band = +/- sqrt(N)): vs SC lat
 SC longitude (chi, summed over latitude). `sc_lonlat.py events.fits.gz out_prefix 1` (also keeps the 2-D 360 x 180 counts in the .npz).
 Counts per latitude bin include the cos(lat) solid-angle factor. Features: a 1-2 deg wide spike at latitude 0 (psi = 90 deg, scatters in the
 detector plane) and sharp spikes/dips at longitudes 0, 90, 180, 270 deg plus finer structure at the 1 deg scale (detector geometry).
+
+### Spikes and dips at SC longitude 0/90/180/270 deg (`figures_dist1cm/sc_longitude_spike_fold90.png`, `sc_longitude_spike_vs_distance.png`)
+All distances combined (Distance >= 1 cm), the 5 deg bin centred on a spike averages ~17% below the global mean (~21% below its neighbours);
+the spike excess covers only ~45% of the dips' deficit, the rest is roughly balanced by slightly elevated shoulders at 5-13 deg, so the total is
+conserved to a few % only over about +-13 deg. In bands of the hit separation (`lon_vs_dist.py`) the empty gap around each axis shrinks as 1/Distance:
+|offset| < ~3.3 deg for 1-2 cm, ~2.2 for 2-3, ~1.2 for 3-5, ~0.8 for 5-8 and ~0.3 deg for 8-30 cm, i.e. tan(gap) * Distance ~ 1.1 mm,
+the signature of quantized hit positions (events with a transverse offset below one position quantum are reconstructed exactly on the axis).
