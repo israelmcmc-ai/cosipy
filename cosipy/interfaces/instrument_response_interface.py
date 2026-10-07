@@ -1,4 +1,6 @@
 import operator
+
+import numpy as np
 from typing import Protocol, runtime_checkable, Union, Optional, Iterable, Type
 
 from astropy.coordinates import SkyCoord
@@ -26,6 +28,7 @@ from cosipy.interfaces.photon_parameters import (
 )
 
 from cosipy.polarization import PolarizationAngle
+from cosipy.util.iterables import asarray
 
 __all__ = ["BinnedInstrumentResponseInterface"]
 
@@ -289,7 +292,12 @@ class FarFieldInstrumentResponseFunctionInterface(InstrumentResponseFunctionInte
             cls._event_probability is FarFieldInstrumentResponseFunctionInterface._event_probability):
             raise NotImplementedError("Implement _differential_effective_area_cm2 and/or _event_probability")
 
-        return map(operator.truediv, self._differential_effective_area_cm2(photons, events), self._effective_area_cm2(photons))
+        # Where the effective area is zero the event is impossible: return
+        # zero probability instead of 0/0 = NaN or x/0 = inf.
+        diff = asarray(self._differential_effective_area_cm2(photons, events), dtype=float)
+        aeff = asarray(self._effective_area_cm2(photons), dtype=float)
+
+        return np.divide(diff, aeff, out=np.zeros_like(diff), where=aeff > 0)
 
     def effective_area(self, photons: Union[PhotonWithDirectionInSCFrameInterface, PhotonListWithDirectionInSCFrameInterface]) -> Union[Quantity,Iterable[Quantity]]:
         """
