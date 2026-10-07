@@ -125,6 +125,21 @@ tutorials:
         COSI-SMEX/DC4/Data/Responses/unpolarized_nfresponse_v1-01.pt:
           checksum: bf2d0c16eac5954fb56489480c2602ca
 
+    phase_resolved_analysis_crab_relative_hist:
+      notebook: phase_resolved_analysis/tutorial_weighted_pulsation_analysis_crab_relative_hist_response.ipynb
+      wasabi_files:
+        COSI-SMEX/DC4/Data/Sources/Crab_DC4_3months_unbinned_data_filtered_with_SAAcut.fits.gz:
+          checksum: 74ae81a979caf3e398b20091779851bb
+        COSI-SMEX/DC4/Data/Orientation/DC4_final_530km_3_month_with_slew_15sbins_GalacticEarth_SAA.fits:
+          checksum: ca94ff1d7a73c1f41479aaf598807673
+        COSI-SMEX/DC4/Data/Backgrounds/Total_DC4_BG_3months_unbinned_data_filtered_with_SAAcut_withSAAbck.fits.gz:
+          checksum: 73c8b23e43684da3b35c25499254202b
+        COSI-SMEX/develop/Data/Responses/relative_hist_irf_from_nf_response.h5.zip:
+          checksum: d9093daeaf56a386095a42ae40c6635e
+          unzip: True
+        COSI-SMEX/DC4/Data/Responses/nfbackground_v1-01.pt:
+          checksum: 52a4fb024930e18430bff80db882d3d5
+
     spectral_fit_normalizing_flows_crab:
       notebook: spectral_fits/continuum_fit/crab/example_crab_fit_normalizing_flows.ipynb
       wasabi_files:
