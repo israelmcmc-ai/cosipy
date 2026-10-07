@@ -143,3 +143,13 @@ Same week-1 `.tra` scan, now also filling 2-D (x, y) histograms (0.05 cm bins) p
 (strip lattice as above, ~10% of hits between strips not shown) and draws one panel per layer, top layer first: 2 x 2 detectors with chamfered corners.
 Share of the hits per layer (top to bottom): all hits 38 / 25 / 20 / 17%, first hits 43 / 23 / 17 / 17%. The four detectors of a layer are balanced to 1-2%
 (layer 1: 26.0 / 24.1 / 25.7 / 24.1% for x<0,y<3 / x>0,y<3 / x<0,y>3 / x>0,y>3); the outer 1 cm of a detector has 73-79% of the central density for all hits.
+
+### Distance > 8 cm: hit-position density and hit-pair geometry (`figures_hit_positions/dist8cm/`)
+`DMIN=8 run_hit_positions.sh outdir` repeats the week-1 `.tra` scan keeping only events whose first-to-second-hit distance (from the `CH 0`/`CH 1`
+positions) is > 8 cm (686,797 of 15.32M events, 4.5%; cosmic photons 2.8%, primary protons 7.3%, albedo photons 7.0%) and also stores diagnostics of the first->second
+displacement (azimuth by lateral-distance band and by detector relation, dx-dy map, dz, lateral separation, layer pairs). Plots: `plot_hit_xy.py` (xy density per layer, all /
+first / second hits) and `plot_hit_geometry.py` (+ a simple geometric Monte Carlo of the 2 x 2 detector layout).
+Findings: 89% of the pairs are in different detectors (same / x-neighbour / y-neighbour / diagonal: 11 / 32 / 34 / 23%; without the cut 93% are in the same detector);
+the first and second hits sit near the detector edges facing the gaps (34.9% of the first hits within 1.5 cm of the y-gap edges vs 22.0% without the cut, area 21%; 25.2% vs 20.5% for the x-gap edges);
+the azimuth of the lateral displacement peaks along +-x and +-y (28% of the events within 15 deg of the axes' windows' ... see the plot) with minima on the diagonals, as the psichi lobes do.
+The geometric Monte Carlo (uniform hits in one layer, weight exp(-rho/lambda)/rho^2, rho > 8 cm) reproduces the four axis maxima and the diagonal minima but over-weights x-neighbours and under-weights diagonal / same-detector pairs (it ignores the vertical separation).
