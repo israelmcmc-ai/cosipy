@@ -136,3 +136,10 @@ histograms in `histograms/*.npz`) and `plot_hit_positions.py` draws `hit_positio
 x and y hits sit on a strip lattice (pitch 0.1164 cm, 64 strips per detector, 2 detectors per axis), so they are plotted as counts per strip
 (`hit_strip_lattice_zoom.png` shows the lattice; ~10% of the hits lie between strips). z shows 4 detector layers (12.26-13.77, 14.7-16.3,
 17.2-18.8, 19.7-21.45 cm) with spikes at the layer mid-planes (z = 13.01, 15.57, 18.13, 20.71 cm).
+
+### x-y hit density per detector layer (`figures_hit_positions/hit_xy_density_by_layer_{all_hits,first_hit,second_hit}.png`)
+Same week-1 `.tra` scan, now also filling 2-D (x, y) histograms (0.05 cm bins) per detector layer (z boundaries 12.0 / 14.2 / 16.9 / 19.3 / 22.0 cm;
+`histograms/*.npz` now hold these as `xy_<kind>_L<layer>` besides the 1-D x, y, z histograms). `plot_hit_xy.py` reads the (x strip, y strip) cells
+(strip lattice as above, ~10% of hits between strips not shown) and draws one panel per layer, top layer first: 2 x 2 detectors with chamfered corners.
+Share of the hits per layer (top to bottom): all hits 38 / 25 / 20 / 17%, first hits 43 / 23 / 17 / 17%. The four detectors of a layer are balanced to 1-2%
+(layer 1: 26.0 / 24.1 / 25.7 / 24.1% for x<0,y<3 / x>0,y<3 / x<0,y>3 / x>0,y>3); the outer 1 cm of a detector has 73-79% of the central density for all hits.
