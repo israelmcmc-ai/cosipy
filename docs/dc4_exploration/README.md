@@ -151,5 +151,5 @@ displacement (azimuth by lateral-distance band and by detector relation, dx-dy m
 first / second hits) and `plot_hit_geometry.py` (+ a simple geometric Monte Carlo of the 2 x 2 detector layout).
 Findings: 89% of the pairs are in different detectors (same / x-neighbour / y-neighbour / diagonal: 11 / 32 / 34 / 23%; without the cut 93% are in the same detector);
 the first and second hits sit near the detector edges facing the gaps (34.9% of the first hits within 1.5 cm of the y-gap edges vs 22.0% without the cut, area 21%; 25.2% vs 20.5% for the x-gap edges);
-the azimuth of the lateral displacement peaks along +-x and +-y (28% of the events within 15 deg of the axes' windows' ... see the plot) with minima on the diagonals, as the psichi lobes do.
+the azimuth of the lateral displacement peaks along +-x and +-y (18.6% of the events within 15 deg of the x axis and 23.5% of the y axis, vs 16.7% each for a uniform azimuth; 57.9% on the diagonals vs 66.7%) with minima on the diagonals, as the psichi lobes do.
 The geometric Monte Carlo (uniform hits in one layer, weight exp(-rho/lambda)/rho^2, rho > 8 cm) reproduces the four axis maxima and the diagonal minima but over-weights x-neighbours and under-weights diagonal / same-detector pairs (it ignores the vertical separation).
