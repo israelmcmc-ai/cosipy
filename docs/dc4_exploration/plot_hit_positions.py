@@ -14,13 +14,13 @@ import matplotlib.pyplot as plt
 
 def per_strip(edges, h, frac=0.25):
     """Counts of each strip: the strips are the narrow peaks (bins above frac * the max of their block; each strip falls in one 0.05 cm
-    bin since the bins are narrower than the pitch). Returns strip positions, counts, the block bounds and the fraction of the hits
-    that lie between strips (shared / interpolated positions)."""
+    bin since the bins are narrower than the pitch). Returns strip positions, counts, the fraction of the hits that lie
+    between strips (shared / interpolated positions) and the bin indices of the strips."""
     c = 0.5 * (edges[1:] + edges[:-1])
     nz = np.flatnonzero(h > 0)
     blocks = np.split(nz, np.flatnonzero(np.diff(nz) > 6) + 1)           # blocks separated by gaps > 6 empty bins
     peaks = np.concatenate([b[h[b] > frac * h[b].max()] for b in blocks])
-    return c[peaks], h[peaks], 1 - h[peaks].sum() / h.sum()
+    return c[peaks], h[peaks], 1 - h[peaks].sum() / h.sum(), peaks
 
 
 def split_blocks(pos, cnt, gap=0.5):
@@ -43,7 +43,7 @@ if __name__ == '__main__':
             h = sum(z[f'{k}_{a}'] for z in Z)
             ax = axs[r, c]
             if a in 'xy':
-                pos, cnt, between = per_strip(e, h)
+                pos, cnt, between, _ = per_strip(e, h)
                 ax.plot(*split_blocks(pos, cnt), lw=0.9, marker='.', ms=2)
                 ax.set_ylabel(f'{title}: counts / strip')
                 if r == 0:
