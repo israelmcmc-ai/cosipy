@@ -112,10 +112,38 @@ tutorials:
     spectral_fit_relative_hist_grb:
       notebook: spectral_fits/continuum_fit/grb/example_grb_fit_relative_hist_response.ipynb
       wasabi_files:
-        COSI-SMEX/DC3/Data/Sources/GRB_bn090424592_3months_unbinned_data_filtered_with_SAAcut.fits.gz:
-          checksum: 08c1f1202d78df40a4aed3b785d273e0
+        COSI-SMEX/DC4/Data/Mock_Dataset/dc4_mock_dataset_week_4_unbinned_data_filtered_with_SAAcut.fits.gz:
+          checksum: 034fa0046ea6116a85ee1ad1365cce72
         COSI-SMEX/DC4/Data/Orientation/DC4_final_530km_3_month_with_slew_15sbins_GalacticEarth_SAA.fits:
           checksum: ca94ff1d7a73c1f41479aaf598807673
+        COSI-SMEX/develop/Data/Products_and_Templates/Background_Models/HistBackgroundTemplate/dc4_mock_bkg_template.h5.zip:
+          checksum: fa1011ca70f8d583ac9b4fc08db73e66
+          unzip: True
+        COSI-SMEX/develop/Data/Products_and_Templates/Background_Models/HistBackgroundTemplate/dc4_mock_bkg_template_dist1cm.h5.zip:
+          checksum: 8bb361a5b9b3f145fe2b965006b2bd3c
+          unzip: True
+        COSI-SMEX/develop/Data/Responses/ResponseContinuum.area.relative.nonsparse_smoothing1p0.h5.zip:
+          checksum: bd2dfa700d0d382b052ea428a7eeabe1
+          unzip: True
+        COSI-SMEX/develop/Data/Responses/relative_hist_irf_from_nf_response.h5.zip:
+          checksum: d9093daeaf56a386095a42ae40c6635e
+          unzip: True
+        COSI-SMEX/DC4/Data/Responses/unpolarized_nfresponse_v1-01.pt:
+          checksum: bf2d0c16eac5954fb56489480c2602ca
+
+    spectral_fit_relative_hist_crab:
+      notebook: spectral_fits/continuum_fit/crab/example_crab_fit_relative_hist_response.ipynb
+      wasabi_files:
+        COSI-SMEX/DC4/Data/Mock_Dataset/dc4_mock_dataset_week_4_unbinned_data_filtered_with_SAAcut.fits.gz:
+          checksum: 034fa0046ea6116a85ee1ad1365cce72
+        COSI-SMEX/DC4/Data/Orientation/DC4_final_530km_3_month_with_slew_15sbins_GalacticEarth_SAA.fits:
+          checksum: ca94ff1d7a73c1f41479aaf598807673
+        COSI-SMEX/develop/Data/Products_and_Templates/Background_Models/HistBackgroundTemplate/dc4_mock_bkg_template.h5.zip:
+          checksum: fa1011ca70f8d583ac9b4fc08db73e66
+          unzip: True
+        COSI-SMEX/develop/Data/Products_and_Templates/Background_Models/HistBackgroundTemplate/dc4_mock_bkg_template_dist1cm.h5.zip:
+          checksum: 8bb361a5b9b3f145fe2b965006b2bd3c
+          unzip: True
         COSI-SMEX/develop/Data/Responses/ResponseContinuum.area.relative.nonsparse_smoothing1p0.h5.zip:
           checksum: bd2dfa700d0d382b052ea428a7eeabe1
           unzip: True
