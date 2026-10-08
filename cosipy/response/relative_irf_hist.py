@@ -287,12 +287,17 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
         irf /= axes.expand_dims(phase_space_em, axes.label_to_index(['Ei', 'Epsilon']))
 
         # Bins in the unphysical region of the CDS reparametrization (Phi +
-        # Theta outside [0, pi]) have zero phase space and zero contents,
-        # so the divisions above produce 0/0 = NaN there. Replace with the
-        # physically correct value of zero differential effective area, so
-        # these bins don't poison interpolation for nearby physical events.
-        # In place, with a single mask: np.nan_to_num would allocate copies of the (large) contents
-        irf.contents[np.isnan(irf.contents)] = 0
+        # Theta outside [0, pi]) have zero phase space, so the divisions
+        # above produce 0/0 = NaN there if the contents are exactly zero,
+        # or +-inf if they are not (e.g. due to smoothing or interpolation
+        # when the histogram was built). Replace both with the physically
+        # correct value of zero differential effective area, so these bins
+        # don't poison interpolation for nearby physical events. Note that
+        # the default posinf/neginf of nan_to_num would instead turn inf
+        # into the largest finite float, which overflows to inf/NaN when
+        # interpolating. This is done in place with a single mask, since
+        # nan_to_num would also allocate copies of the (large) contents.
+        irf.contents[~np.isfinite(irf.contents)] = 0
 
         self._diff_aeff = irf
 
@@ -924,6 +929,21 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
                                      (photon_lon_rad, photon_lat_rad, photon_energy_keV,
                                       epsilon, phi_kin_rad, theta_rad, zeta_rad))
 
+
+    def _event_probability(self, photons: PhotonListWithDirectionAndEnergyInSCFrameInterface, events: EmCDSEventDataInSCFrameInterface) -> Iterable[float]:
+        """
+        Differential effective area divided by the total effective area.
+
+        Where the interpolated total effective area is zero (e.g. photon
+        energy or direction outside the region covered by the histogram)
+        the event is impossible, so the probability is zero. The default
+        implementation would give 0/0 = NaN or x/0 = inf there.
+        """
+
+        diff = np.asarray(self._differential_effective_area_cm2(photons, events), dtype=float)
+        aeff = np.asarray(self._effective_area_cm2(photons), dtype=float)
+
+        return np.divide(diff, aeff, out=np.zeros_like(diff), where=aeff > 0)
 
     def _random_events(self, photons: PhotonListWithDirectionInSCFrameInterface) -> EventDataInterface:
         """
