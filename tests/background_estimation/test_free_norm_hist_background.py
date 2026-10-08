@@ -430,3 +430,153 @@ def test_window_errors(window):
     bad = HistBackgroundTemplate.empty(rate_axes, phi_axes, Axes(list(psichi_axes[:3]) + [galactic]))
     with pytest.raises(NotImplementedError):
         FreeNormHistBackgroundDensity(data, sc_history, bad)
+
+
+def assert_same_templates(first, second):
+    for name in HistBackgroundTemplate._names:
+        assert np.allclose(getattr(first, name).contents, getattr(second, name).contents, rtol=0, atol=1e-9)
+        assert getattr(first, name).axes == getattr(second, name).axes
+
+
+def test_remove():
+    live = np.array([800., 1000., 500., 1000.])
+    full = make_history([22., 22., -22., -22.], live * u.s)
+    t0 = full.tstart.utc.unix
+    time_edges = t0 + np.arange(0, 4001, 500.)
+
+    history_a = full.select_interval(full.tstart, full.tstart + 2000 * u.s)
+    history_b = full.select_interval(full.tstart + 2000 * u.s, full.tstop)
+    data_a = make_data(full, [100., 600., 1900.], [150., 300., 800.], [0.5, 1., 2.])
+    data_b = make_data(full, [2100., 3500.], [200., 900.], [1.5, 2.5], [1., -2.], [0.4, -0.7])
+
+    only_a = HistBackgroundTemplate.empty(*make_axes(time_edges))
+    only_a.fill(data_a, history_a)
+
+    both = HistBackgroundTemplate.empty(*make_axes(time_edges))
+    both.fill(data_a, history_a)
+    both.fill(data_b, history_b)
+    assert both.livetime.contents.sum() == pytest.approx(live.sum())
+    assert both.rate_counts.contents.sum() == 5
+
+    both.remove(data_b, history_b)
+    assert_same_templates(both, only_a)
+    assert both.livetime.contents.min() >= 0
+
+    # Removing a window from a bin reduces the livetime by the livetime of the window.
+    # The first bin is [0, 500) s, where the livetime fraction is 0.8
+    template = HistBackgroundTemplate.empty(*make_axes(time_edges))
+    event = make_data(full, [200.], 150., 0.5)
+    template.fill(event, full)
+    assert template.livetime.contents[0] == pytest.approx(400.)
+
+    window = full.select_interval(full.tstart + 100 * u.s, full.tstart + 300 * u.s)
+    template.remove(event, window)
+
+    assert template.livetime.contents[0] == pytest.approx(400. - 200 * 0.8)
+    assert np.allclose(template.livetime.contents[1:], [400., 500., 500., 250., 250., 500., 500.])
+    assert template.rate_counts.contents.sum() == 0
+    assert template.phi_counts.contents.sum() == 0
+    assert template.psichi_counts.contents.sum() == 0
+
+
+def test_smooth_phi():
+    time_edges = np.array([0., 1000.])
+    template = HistBackgroundTemplate.empty(*make_axes(time_edges))
+    template.psichi_counts[1, 2, 3, 5] = 7.
+    template.psichi_counts[0, 1, 2, 9] = 3.
+
+    phi_width = np.pi / 6
+    smoothed = template.smooth(phi_fwhm=np.rad2deg(phi_width) * u.deg)
+
+    # Kernel truncated at 4 sigma (2 bins) and normalized
+    sigma = 1 / (2 * np.sqrt(2 * np.log(2)))
+    kernel = np.exp(-np.arange(-2, 3) ** 2 / (2 * sigma ** 2))
+    kernel /= kernel.sum()
+
+    counts = smoothed.psichi_counts.contents
+    assert np.allclose(counts[1, 2, 1:6, 5], 7 * kernel)
+    assert counts[1, 2, 0, 5] == 0 and counts[1, 2, 3, 6] == 0
+    assert counts[1, 2, :, 5].sum() == pytest.approx(7.)
+
+    # Other maps are independent
+    assert counts[0, 1, :, 9].sum() == pytest.approx(3.)
+    assert counts.sum() == pytest.approx(10.)
+    assert np.array_equal(template.psichi_counts.contents.sum(), 10.)
+
+    # Only psichi_counts changes
+    assert np.array_equal(smoothed.phi_counts.contents, template.phi_counts.contents)
+
+    rate_axes, phi_axes, psichi_axes = make_axes(time_edges)
+    nonuniform = Axes([psichi_axes[0], psichi_axes[1], Axis([0., .5, 1., 2., 3., np.pi], label='Phi'), psichi_axes[3]])
+    with pytest.raises(ValueError):
+        HistBackgroundTemplate.empty(rate_axes, phi_axes, nonuniform).smooth(phi_fwhm=10 * u.deg)
+
+
+def time_template(counts_per_bin, livetime):
+    template = HistBackgroundTemplate.empty(*make_axes(np.arange(len(livetime) + 1) * 100.))
+    template.livetime[...] = livetime
+    template.rate_counts[...] = counts_per_bin
+    return template
+
+
+def test_smooth_time_uniform_matches_filter():
+    from scipy.ndimage import gaussian_filter1d
+
+    rng = np.random.default_rng(3)
+    livetime = rng.uniform(50, 100, 60)
+    livetime[20:25] = 0
+    counts = rng.uniform(0, 50, (60, 4)) * (livetime[:, None] > 0)
+    template = time_template(counts, livetime)
+
+    smoothed = template.smooth(time_fwhm=250 * u.s)
+    sigma = 2.5 / (2 * np.sqrt(2 * np.log(2)))
+
+    assert np.allclose(smoothed.rate_counts.contents, gaussian_filter1d(counts, sigma, axis=0, mode='constant'))
+    assert np.allclose(smoothed.livetime.contents, gaussian_filter1d(livetime, sigma, mode='constant'))
+
+
+def test_smooth_time_counts():
+    nbins = 200
+    livetime = np.full(nbins, 100.)
+    livetime[60:70] = 0
+
+    # Em bin 0: 1 count/s, Em bin 1: 0.01 count/s, the others are empty
+    counts = np.zeros((nbins, 4))
+    counts[:, 0], counts[:, 1] = 100., 1.
+    counts *= (livetime > 0)[:, None]
+    template = time_template(counts, livetime)
+
+    smoothed = template.smooth(time_counts=50)
+    rate = np.divide(smoothed.rate_counts.contents, smoothed.livetime.contents[:, None],
+                     out=np.zeros_like(counts), where=smoothed.livetime.contents[:, None] > 0)
+
+    # Constant rate stays constant (FWHM of 50 s and 5000 s). The livetime uses the shortest
+    # kernel, so it doesn't reach the middle of the gap, but the rate of the long kernel does
+    assert np.isfinite(smoothed.rate_counts.contents).all()
+    assert smoothed.livetime.contents[65] == 0
+    assert smoothed.livetime.contents[58] > 0
+    live = smoothed.livetime.contents > 0
+    assert np.allclose(rate[live, 0], 1.)
+    assert np.allclose(rate[live, 1], 1e-2)
+    assert np.all(rate[:, 2:] == 0)
+
+    # Step in the rate at bin 100: 100 -> 300 and 1 -> 3 counts per bin.
+    # Mean rates 2 and 0.02 count/s: FWHM of 25 s (negligible) and 2500 s (25 bins, sigma = 10.6 bins)
+    livetime = np.full(nbins, 100.)
+    counts = np.zeros((nbins, 4))
+    counts[:100, 0], counts[100:, 0] = 100., 300.
+    counts[:100, 1], counts[100:, 1] = 1., 3.
+    smoothed = time_template(counts, livetime).smooth(time_counts=50)
+
+    rate = smoothed.rate_counts.contents / smoothed.livetime.contents[:, None]
+
+    def transition_width(r, low, high):
+        fraction = (r - low) / (high - low)
+        return np.sum((fraction > 0.1) & (fraction < 0.9))
+
+    assert transition_width(rate[:, 0], 1., 3.) <= 1
+    # 10-90% width of a smoothed step is 2.56 sigma
+    assert transition_width(rate[:, 1], 1e-2, 3e-2) == pytest.approx(2.563 * 2500 / 100 / 2.355, abs=2)
+
+    with pytest.raises(ValueError):
+        template.smooth(time_fwhm=100 * u.s, time_counts=50)

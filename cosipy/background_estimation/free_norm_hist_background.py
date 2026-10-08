@@ -28,6 +28,11 @@ def rocking_angle(sc_history: SpacecraftHistory) -> u.Quantity:
     positive toward the North, i.e. toward the celestial pole projected on
     the local horizon plane.
 
+    Notes
+    -----
+    The survey modes are separated by the user with fixed Rocking edges. For
+    the real mission, the attitude history may need to be validated first.
+
     Parameters
     ----------
     sc_history : SpacecraftHistory
@@ -38,6 +43,10 @@ def rocking_angle(sc_history: SpacecraftHistory) -> u.Quantity:
         One angle in (-180, 180] deg per interval of `sc_history`.
     """
 
+    # TODO: the survey modes are separated with fixed Rocking edges, which works for DC4
+    # (exactly +-22 deg plus 1% slews). For the real mission the attitude history might be
+    # more complicated (different rocking profiles, slews, safe modes...), so check that
+    # it is consistent with the expected survey modes and remove the outliers.
     z_axis = sc_history.attitude.transform_to('galactic').as_axes()[2]
     z = z_axis.cartesian.xyz.value[:, :-1]
     zenith = sc_history.earth_zenith.cartesian.xyz.value[:, :-1]
@@ -89,6 +98,13 @@ def _event_arrays(data: TimeTagEmCDSEventDataInSCFrameInterface):
                       asarray(data.scattered_lat_rad_sc, dtype=float),
                       unit=u.rad, frame=SpacecraftFrame())
     return time, energy, phi, psichi
+
+
+def _gaussian_filter(array: np.ndarray, sigma: float, **kwargs) -> np.ndarray:
+    """Gaussian filter, doing nothing for a negligible `sigma`, which gaussian_filter1d may not accept."""
+    if sigma < 0.01:
+        return array
+    return gaussian_filter1d(array, sigma, **kwargs)
 
 
 def _normalized_density(counts: np.ndarray, widths) -> np.ndarray:
@@ -197,6 +213,34 @@ class HistBackgroundTemplate:
             If the PsiChi axis is not in the SpacecraftFrame.
         """
 
+        self._accumulate(data, sc_history, 1)
+
+    def remove(self, data: TimeTagEmCDSEventDataInSCFrameInterface, sc_history: SpacecraftHistory) -> None:
+        """
+        Inverse of `fill`: subtract the events and the livetime of `sc_history`.
+
+        For example, to exclude the on-time window of a GRB from a template that
+        was built with it. The rate of the affected time bins then comes from the
+        rest of the bin, and time smoothing interpolates it from the neighboring times.
+
+        The events and `sc_history` must be a subset of what was filled, with the same
+        selections applied to the events. Tiny negative livetimes from float round-off
+        are set to 0.
+
+        Parameters
+        ----------
+        data : TimeTagEmCDSEventDataInSCFrameInterface
+        sc_history : SpacecraftHistory
+            Must contain all the events.
+        """
+
+        self._accumulate(data, sc_history, -1)
+
+        self.livetime[...] = np.clip(self.livetime.contents, 0, None)
+
+    def _accumulate(self, data, sc_history: SpacecraftHistory, sign: int) -> None:
+        """Add (`sign` = 1) or subtract (`sign` = -1) the events and livetime."""
+
         _check_sc_frame(self.psichi_counts.axes['PsiChi'])
 
         time, energy, phi, psichi = _event_arrays(data)
@@ -210,16 +254,18 @@ class HistBackgroundTemplate:
                       'PsiChi': psichi}
             units = {'Rocking': u.deg, 'Em': u.keV, 'Phi': u.rad}
             hist.fill(*(_axis_values(axis, values[axis.label], units.get(axis.label))
-                        for axis in hist.axes), warn_overflow=False)
+                        for axis in hist.axes), weight=sign, warn_overflow=False)
 
         edges = np.clip(self.livetime.axis.edges,
                         sc_history.tstart.utc.unix, sc_history.tstop.utc.unix)
         cumulative = sc_history.cumulative_livetime(Time(edges, format='unix')).to_value(u.s)
-        self.livetime[...] = self.livetime.contents + np.diff(cumulative)
+        self.livetime[...] = self.livetime.contents + sign * np.diff(cumulative)
 
     def smooth(self,
                psichi_fwhm: Optional[u.Quantity] = None,
-               time_fwhm: Optional[u.Quantity] = None) -> 'HistBackgroundTemplate':
+               time_fwhm: Optional[u.Quantity] = None,
+               phi_fwhm: Optional[u.Quantity] = None,
+               time_counts: Optional[float] = None) -> 'HistBackgroundTemplate':
         """
         Smoothed copy of the template.
 
@@ -229,17 +275,46 @@ class HistBackgroundTemplate:
             FWHM of a Gaussian on the sphere, applied to every
             (``Rocking``, ``Em``, ``Phi``) map of `psichi_counts`. Negative
             values are clipped to 0 and the total of each map is preserved.
+        phi_fwhm : astropy.units.Quantity, optional
+            FWHM of a Gaussian along the ``Phi`` axis of `psichi_counts`, i.e.
+            across neighboring ``Phi`` bins. It is applied before `psichi_fwhm`.
+            The ``Phi`` bins must be uniform.
         time_fwhm : astropy.units.Quantity, optional
-            FWHM of a Gaussian along ``Time``, applied to both `rate_counts`
-            and `livetime` such that the rate stays consistent across gaps.
-            The ``Time`` bins must be uniform.
+            FWHM of a Gaussian along ``Time``, the same for all energies. It is
+            applied to the rate and to `livetime`, such that the rate stays
+            consistent across gaps. The ``Time`` bins must be uniform.
+        time_counts : float, optional
+            Alternative to `time_fwhm` that adapts to the statistics: the FWHM of
+            each ``Em`` bin of `rate_counts` is `time_counts` divided by its mean count
+            rate over the whole template, i.e. about `time_counts` counts per FWHM. High
+            energies get long integration times, and low energies short ones.
+
+        Notes
+        -----
+        The smoothed rate of an ``Em`` bin is the smoothed counts over the smoothed
+        livetime, both with the kernel of that bin. The new livetime is smoothed with the
+        shortest kernel, and the new counts are the smoothed rate times the new livetime.
+        The rate of a bin without livetime is filled only if the kernel reaches livetime.
 
         Returns
         -------
         HistBackgroundTemplate
         """
 
+        if time_fwhm is not None and time_counts is not None:
+            raise ValueError("Use either time_fwhm or time_counts, not both")
+
         new = HistBackgroundTemplate(*(hist.copy() for hist in self._histograms().values()))
+
+        sigma_per_fwhm = 1 / (2 * np.sqrt(2 * np.log(2)))
+
+        if phi_fwhm is not None:
+            widths = _unitless(new.psichi_counts.axes['Phi'], u.rad).widths
+            if not np.allclose(widths, widths[0]):
+                raise ValueError("Phi smoothing requires uniform Phi bins")
+
+            sigma = u.Quantity(phi_fwhm).to_value(u.rad) * sigma_per_fwhm / widths[0]
+            new.psichi_counts[...] = _gaussian_filter(new.psichi_counts.contents, sigma, axis=2, mode='nearest')
 
         if psichi_fwhm is not None:
             axis = new.psichi_counts.axes['PsiChi']
@@ -256,17 +331,42 @@ class HistBackgroundTemplate:
                 smoothed *= total / smoothed.sum()
                 counts[index] = hp.reorder(smoothed, r2n=True) if axis.is_nested else smoothed
 
-        if time_fwhm is not None:
+        if time_fwhm is not None or time_counts is not None:
             widths = new.livetime.axis.widths
             if not np.allclose(widths, widths[0]):
                 raise ValueError("Time smoothing requires uniform Time bins")
 
-            sigma = u.Quantity(time_fwhm).to_value(u.s) / (2 * np.sqrt(2 * np.log(2))) / widths[0]
+            nem = new.rate_counts.shape[1]
 
-            new.rate_counts[...] = gaussian_filter1d(new.rate_counts.contents, sigma, axis=0, mode='constant')
-            new.livetime[...] = gaussian_filter1d(new.livetime.contents, sigma, mode='constant')
+            if time_fwhm is not None:
+                fwhm = np.full(nem, u.Quantity(time_fwhm).to_value(u.s))
+            else:
+                mean_rate = new.rate_counts.contents.sum(axis=0) / new.livetime.contents.sum()
+                with np.errstate(divide='ignore'):
+                    fwhm = np.minimum(time_counts / mean_rate, widths.sum())
+
+            new._smooth_time(fwhm * sigma_per_fwhm / widths[0])
 
         return new
+
+    def _smooth_time(self, sigma: np.ndarray) -> None:
+        """Smooth the rate and livetime in place, with `sigma` (in ``Time`` bins) for each ``Em`` bin."""
+
+        counts = self.rate_counts.contents
+        livetime = self.livetime.contents
+
+        new_livetime = _gaussian_filter(livetime, sigma.min(), axis=0, mode='constant')
+        new_counts = np.zeros_like(counts)
+
+        for i, sigma_i in enumerate(sigma):
+            smoothed_livetime = _gaussian_filter(livetime, sigma_i, axis=0, mode='constant')
+            smoothed_counts = _gaussian_filter(counts[:, i], sigma_i, axis=0, mode='constant')
+            rate = np.divide(smoothed_counts, smoothed_livetime,
+                             out=np.zeros_like(smoothed_counts), where=smoothed_livetime > 0)
+            new_counts[:, i] = rate * new_livetime
+
+        self.rate_counts[...] = new_counts
+        self.livetime[...] = new_livetime
 
     def __iadd__(self, other: 'HistBackgroundTemplate') -> 'HistBackgroundTemplate':
         for name, hist in self._histograms().items():
