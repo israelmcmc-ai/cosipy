@@ -1,18 +1,24 @@
 # CLAUDE.md
 
 Notes for Claude Code sessions working on this repo, in particular on the
-relative-coordinates histogram IRF (`IRFRelativeHistUnpolarized`).
+relative-coordinates histogram IRF (`IRFRelativeHistUnpolarized`) and the
+histogram-based background (`FreeNormHistBackgroundDensity`).
 
 ## Repo and branch workflow
 
 - This is `israelmcmc-ai/cosipy`, a fork of `cositools/cosipy`. The working
-  branch is `develop_israel`: `rel_irf_hist` (which feeds the upstream PR
-  `cositools/cosipy#641`) plus this CLAUDE.md, which is kept out of
-  `rel_irf_hist` so it doesn't go upstream.
-- **Don't commit directly to `develop_israel` or `rel_irf_hist`.** Put work on
-  a new branch and open a PR with base `develop_israel`. Unrelated side fixes
-  (e.g. to `EnergySelector`, `DistanceSelector`, the chain selector) go on
-  their own branch with a PR against `develop`.
+  branch is `develop_israel`: `cositools/develop` plus this CLAUDE.md, which
+  must not go upstream. (`rel_irf_hist` was merged upstream as
+  `cositools/cosipy#641`.)
+- To update `develop_israel`, merge `cositools/develop` into it (remote
+  `upstream` = `https://github.com/cositools/cosipy.git`) with a merge commit,
+  never a rebase, and only when asked. Then merge `develop_israel` into the
+  open PR branches that conflict, keeping upstream's behavior and wording.
+- **Don't commit directly to `develop_israel`** (except that sync, when asked).
+  Put work on a new branch and open a PR with base `develop_israel`.
+  Unrelated side fixes (e.g. to `EnergySelector`, `DistanceSelector`, the
+  chain selector, or the IRF while working on the background) go on their
+  own branch with their own PR.
 - The maintainer often pushes to the same PR branch while you work (e.g.
   comment edits, scratch scripts). Always `git fetch` before pushing, and
   only rebase *your own unpushed* commits on top; never force-push over
@@ -31,9 +37,26 @@ relative-coordinates histogram IRF (`IRFRelativeHistUnpolarized`).
 
 `import cosipy` pulls in `astromodels`/`threeML` (via
 `cosipy/__init__.py` → `response` → `threeml`), which may fail to install
-(`antlr4-python3-runtime` build error). Try `pip install astromodels threeML`
-first; if that fails, install the light deps and load just the needed
-submodules with stub packages:
+(`antlr4-python3-runtime==4.9.3` build error with Debian's setuptools,
+`AttributeError: install_layout`). A full install works if that wheel is
+built in a clean venv first:
+
+```bash
+pip download "antlr4-python3-runtime==4.9.3" --no-deps --no-binary :all: -d $SCRATCH/antlr
+tar xzf $SCRATCH/antlr/*.tar.gz -C $SCRATCH/antlr
+python -m venv $SCRATCH/bvenv && $SCRATCH/bvenv/bin/pip install setuptools wheel
+$SCRATCH/bvenv/bin/pip wheel --no-deps $SCRATCH/antlr/antlr4-python3-runtime-4.9.3 -w $SCRATCH/wheels
+pip install $SCRATCH/wheels/antlr4_python3_runtime-4.9.3-py3-none-any.whl && pip install -e .
+```
+
+The unbinned tutorials also need the `[ml]` extras even in the hist modes
+(`UnbinnedThreeMLPointSourceResponseIRFAdaptive` imports torch):
+`pip install torch normflows "sphericart[torch]" torch_geometric` (several GB
+with the CUDA libraries; don't use `--no-deps` for torch, it then fails to
+import). Running the `nn` modes on CPU is very slow (> 1 h for the GRB cache).
+
+If the full install isn't possible, install the light deps and load just the
+needed submodules with stub packages:
 
 ```bash
 pip install histpy scoords mhealpy h5py tqdm yayc pytest typing_extensions
@@ -184,9 +207,40 @@ if it's blocked, say so and validate with synthetic histograms.
 
 ## Validating on real files in a sandbox
 
-- The full hist IRF files (9.6 GB) don't fit in a 15 GB sandbox (`from_h5` doesn't pass
-  `copy=False`, so it holds two copies). Slicing the `Ei` axis of the h5 with h5py (e.g.
-  916-5000 keV for Al-26) is enough for line validation.
+- The full hist IRF files hold 9.6 GB of contents. Without
+  https://github.com/israelmcmc-ai/cosipy/pull/24 (`from_h5` defaults to `copy=False`,
+  non-finite cleanup in place) loading one needs > 14 GB and gets OOM-killed in a 15 GB
+  sandbox; with it, the peak is ~11 GB, enough to run the relative-hist tutorials. For
+  line validation, slicing the `Ei` axis of the h5 with h5py (e.g. 916-5000 keV for
+  Al-26) is enough.
+- Run notebooks headless with `nbclient` (`NotebookClient(nb, timeout=None,
+  resources={'metadata': {'path': ...}}).execute()`) on a copy with `data_path`
+  changed; check `dmesg` for "Memory cgroup out of memory" if the kernel dies.
+- Large Wasabi files (e.g. the 16 GB `Total_DC4_BG`) can be streamed with boto3 +
+  gzip and filtered by time without a local copy (fixed-size FITS rows, column names
+  from the header), but the connection resets every few GB: reopen with
+  `Range=bytes=<pos>-` and keep going.
+
+## Histogram background (`cosipy/background_estimation/free_norm_hist_background.py`)
+
+- `HistBackgroundTemplate` holds raw counts (`rate_counts` [Time, Em], `livetime`
+  [Time], `phi_counts` [Rocking, Em, Phi], `psichi_counts` [Rocking, Em, Phi,
+  PsiChi]) built from the data itself, in the SC frame; `fill`/`remove`/`smooth`/`+`
+  and HDF5 `write`/`open`. `FreeNormHistBackgroundDensity` evaluates it with one free
+  norm (Hz) per component. Only the SC frame is supported for now.
+- 3-month DC4 mock templates (all events / Distance >= 1 cm) are on Wasabi under
+  `COSI-SMEX/develop/Data/Products_and_Templates/Background_Models/HistBackgroundTemplate/`,
+  built with `cosipy/background_estimation/scripts/HistBackgroundTemplate/`.
+- Smoothing was chosen by cross-validation (template from a random half of the events,
+  log-likelihood of the other half in 1 h windows): `psichi_fwhm=4 deg`,
+  `phi_fwhm=20 deg`, `time_counts=500`. Use that, not eyeballing, to retune.
+- The template contains all the sources in the data. For a transient, `remove` its
+  on-time window (GRB tutorial). In the DC4 mock data the sources other than the
+  target are ~5% of the events, so the data-driven template overpredicts the true
+  background by a few %; the Crab is only ~1.6% of the events in 3 h, so the Crab
+  tutorial is the real test of the background model.
+- Injected spectra: the mock dataset uses the DC4 sources (e.g. the DC4 Crab is
+  nebula + 3 pulsar components, in cosi-sim `Source_Library/DC4`), not the DC3 ones.
 
 ## histpy gotchas
 
