@@ -158,8 +158,9 @@ if it's blocked, say so and validate with synthetic histograms.
   histogram (usually finer). `from_h5` reads an `AEFF` group automatically
   if present. `_tot_aeff` is linearly interpolated in `Ei` at evaluation
   time.
-- The tutorial is
+- The tutorials are
   `docs/tutorials/spectral_fits/continuum_fit/grb/example_grb_fit_relative_hist_response.ipynb`
+  and `docs/tutorials/spectral_fits/line_fit/al26/example_al26_line_fit_relative_hist_response.ipynb`
   (`irf_mode` = `hist_simple` / `hist_nn` / `nn`).
 
 ### Energy selections (`selections=EnergySelector(...)`)
@@ -204,6 +205,31 @@ if it's blocked, say so and validate with synthetic histograms.
 - A synthetic test whose Epsilon profile has the same shape and scale at
   every `Ei` can't catch `Ei`-interpolation problems. Use shapes that vary
   with `Ei` when testing those.
+
+## Point source folding (`UnbinnedThreeMLPointSourceResponseTrapz`, `cosipy/threeml/psr_fixed_ei.py`)
+
+- Torch-free replacement for `UnbinnedThreeMLPointSourceResponseIRFAdaptive`, used by both
+  tutorials (with `integration_nodes()`, so the PSR cell comes after the source model).
+  Trapezoidal rule in `Ei`; per-event nodes are `Em/(1 + Epsilon)` for the `epsilon_nodes`
+  (array-like), **plus** the `energy_nodes`. Expected counts use `energy_nodes` alone.
+  `mono_nodes` handle Dirac deltas (weight 1); continuum nodes that land exactly on one are
+  shifted by one ULP so the delta isn't picked up by the trapz.
+- Both node sets are needed. Validated against a brute-force 200k-point integral on real data:
+  Epsilon nodes alone were off by a median of +30% (wide Compton-tail bins), and a fixed 1000-point
+  grid alone by ~6% (p95). Combined with 50-100 log points: ~0.1-0.3% (p95). IRFAdaptive was ~2-3%
+  (p95), which shifts the Al-26 line width (sigma 2.11 vs 2.39 keV).
+- For a narrow line the `energy_nodes` spacing must resolve the line (the photopeak Epsilon bins are
+  ~7 keV wide at 1.8 MeV).
+- `integration_nodes(spectrum, irf, energy_range, accuracy=0.01)` suggests the constructor kwargs.
+  Both grids come from thinning a dense grid (trapz error per interval < accuracy relative to the
+  interval, with a floor of 1e-3 of the total; a 1e-6 floor doubled the nodes for no gain).
+  `energy_nodes`: union over the current values, the corners and `nsamples` (128) Sobol samples of
+  the free parameters' [min, max], so bounds matter as much as values. `epsilon_nodes`:
+  `irf.event_probability()` for fixed probe events on the Compton cone (documented in the
+  docstring), with the range from `irf.axes['Epsilon']` if present, since the hist IRF clamps
+  outside its axis instead of going to zero. `estimate_epsilon=False` uses the centers + outer
+  edges of `irf.axes['Epsilon']` instead. On real data it lands well within 1% (max ~0.25%).
+- `IRFRelativeHistUnpolarized.axes` exposes the internal differential-response axes (unitless).
 
 ## Validating on real files in a sandbox
 
