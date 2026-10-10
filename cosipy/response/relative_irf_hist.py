@@ -82,7 +82,9 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
         resolution than the full differential response. If not
         provided (the default), the total effective area is obtained
         by projecting ``irf`` onto its own ``NuLambda``/``Ei`` axes, as
-        before.
+        before. When given, the differential effective area is rescaled
+        by the ratio of this total to ``irf``'s own, so that it still
+        integrates to this total effective area.
     copy : bool, optional
         If True (default) the input histogram(s) are copied before
         their axes and contents are modified in place. Set to False to
@@ -248,8 +250,14 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
         # Get the total effective area
         if aeff is not None:
             self._tot_aeff = self._standardize_aeff(aeff, copy) # cm^2
+            # Kept before any energy selection, and together with irf's own
+            # total, to normalize the differential effective area
+            self._aeff = self._tot_aeff
+            self._irf_tot_aeff = irf.project('NuLambda','Ei') # cm^2
         else:
             self._tot_aeff = irf.project('NuLambda','Ei') # cm^2
+            self._aeff = None
+            self._irf_tot_aeff = None
 
         if selections is not None and not isinstance(selections, tuple):
             selections = (selections,)
@@ -377,12 +385,13 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
         ``Em = Ei*(1 + Epsilon)`` falls within ``selector``'s ranges,
         evaluated at each of ``target_ei_keV``'s *exact* values.
 
-        Within a single ``Ei`` value, the fraction is computed by
-        linearly interpolating between ``Epsilon`` bin centers -- see
-        :meth:`_integrate_piecewise_linear` -- so for **non-uniform**
-        ``Epsilon`` binning it is only an approximation when a cut
-        boundary lands strictly inside a bin; a cut that fully includes
-        or excludes a bin is always exact.
+        Within a single ``Ei`` value, both the selected part and the
+        total are integrals over ``Epsilon`` of the density linearly
+        interpolated between bin centers (and flat up to the axis
+        edges) -- see :meth:`_integrate_piecewise_linear` -- the same
+        model used to evaluate the differential effective area, so the
+        fraction is never above 1. With non-uniform ``Epsilon`` bins
+        this total differs slightly from the plain sum of the contents.
 
         Parameters
         ----------
@@ -411,7 +420,8 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
         for i, ei in enumerate(target_ei_keV):
             content_i = content_vs_epsilon[:, i, :]
             density_i = content_i / epsilon_widths[None, :]
-            total_i = content_i.sum(axis=-1)
+            total_i = IRFRelativeHistUnpolarized._integrate_piecewise_linear(
+                density_i, epsilon_centers, epsilon_edges[0], epsilon_edges[-1])
 
             selected_total = np.zeros(npix)
 
@@ -528,9 +538,12 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
         # grid one Epsilon bin center at a time, so the result stays on
         # irf's own native Epsilon binning.
         content_vs_epsilon = np.empty((len(nulambda_dir), len(target_ei_keV), len(epsilon_centers)))
+        # In chunks of NuLambda, since interp()'s temporary arrays for the
+        # whole grid at once take several GB
         for k, eps_k in enumerate(epsilon_centers):
-            eps_mesh = np.full_like(ei_mesh, eps_k)
-            content_vs_epsilon[:, :, k] = irf_vs_epsilon.interp(photon_dir, ei_mesh, eps_mesh)
+            for rows in np.array_split(np.arange(len(nulambda_dir)), 16):
+                eps_mesh = np.full_like(ei_mesh[rows], eps_k)
+                content_vs_epsilon[rows, :, k] = irf_vs_epsilon.interp(photon_dir[rows], ei_mesh[rows], eps_mesh)
 
         fraction = IRFRelativeHistUnpolarized._selection_fraction(
             content_vs_epsilon, target_ei_keV, epsilon_centers, epsilon_widths, epsilon_edges, selector)
@@ -880,6 +893,21 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
         Iterable[float]
             Differential effective area interpolated at each
             (photon, event) pair, in ``cm^2 / sr / rad / keV``.
+
+        Notes
+        -----
+        The result integrates over the data space (``Em``, ``Phi``,
+        ``PsiChi``) to the total effective area of the photon (before any
+        energy ``selections``, which are not applied to the density):
+
+        - It is zero where ``Epsilon`` is outside the range of the
+          ``Epsilon`` axis, instead of extending the edge bins' density.
+        - If a separate ``aeff`` was given, the density is multiplied by
+          ``aeff / irf_total``, with both interpolated at the photon's
+          direction and energy and ``irf_total`` being the
+          ``NuLambda``/``Ei`` projection of ``irf``, so that it follows
+          ``aeff`` instead of ``irf``'s (typically coarser) total. It is
+          zero where ``irf_total`` is zero.
         """
 
         photon_lon_rad, photon_lat_rad, photon_energy_keV = self._photon_list_to_raw_values(photons)
@@ -925,9 +953,27 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
                                                             lat=Quantity(lat_rad, 'rad', copy=False))
             return photon_dir_chunk, energy_keV, eps, phi, theta, zeta_r
 
-        return self._parallel_interp(self._diff_aeff, build_args,
-                                     (photon_lon_rad, photon_lat_rad, photon_energy_keV,
-                                      epsilon, phi_kin_rad, theta_rad, zeta_rad))
+        diff_aeff = np.asarray(self._parallel_interp(self._diff_aeff, build_args,
+                                                      (photon_lon_rad, photon_lat_rad, photon_energy_keV,
+                                                       epsilon, phi_kin_rad, theta_rad, zeta_rad)))
+
+        # interp() clamps to the edge bins, which would extend their density
+        # indefinitely
+        epsilon_edges = self._diff_aeff.axes['Epsilon'].edges
+        diff_aeff = np.where((epsilon >= epsilon_edges[0]) & (epsilon <= epsilon_edges[-1]), diff_aeff, 0.0)
+
+        if self._aeff is not None:
+            def build_args_aeff(lon_rad, lat_rad, energy_keV):
+                photon_dir_chunk = UnitSphericalRepresentation(lon=Quantity(lon_rad, 'rad', copy=False),
+                                                                lat=Quantity(lat_rad, 'rad', copy=False))
+                return photon_dir_chunk, energy_keV
+
+            raw_photon = (photon_lon_rad, photon_lat_rad, photon_energy_keV)
+            aeff = np.asarray(self._parallel_interp(self._aeff, build_args_aeff, raw_photon))
+            irf_aeff = np.asarray(self._parallel_interp(self._irf_tot_aeff, build_args_aeff, raw_photon))
+            diff_aeff = diff_aeff * np.divide(aeff, irf_aeff, out=np.zeros_like(aeff), where=irf_aeff > 0)
+
+        return diff_aeff
 
 
     def _event_probability(self, photons: PhotonListWithDirectionAndEnergyInSCFrameInterface, events: EmCDSEventDataInSCFrameInterface) -> Iterable[float]:

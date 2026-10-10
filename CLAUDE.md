@@ -185,8 +185,11 @@ if it's blocked, say so and validate with synthetic histograms.
     So `_tot_aeff` can end up with more `Ei` bins than the `aeff` passed in.
 - `_integrate_piecewise_linear` integrates the per-Epsilon density
   (content/ΔEps), linear between centers and flat beyond the first/last
-  center. Integrating over the full range is **not** exactly the content
-  sum when bins are non-uniform, so `content.sum()` is used as the total.
+  center. The selected fraction divides by the same integral over the full
+  Epsilon axis (not `content.sum()`, which differs for non-uniform bins and
+  made the fraction exceed 1 by up to 24% on the real hist_simple file).
+  That is also how `_differential_effective_area_cm2` evaluates the density
+  (zero outside the Epsilon axis).
 
 ### Lessons from debugging narrow energy cuts
 

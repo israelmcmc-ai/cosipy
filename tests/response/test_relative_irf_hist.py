@@ -563,3 +563,172 @@ class TestZeroEffectiveArea:
                     / np.asarray(model._effective_area_cm2(photons)))
 
         assert np.allclose(prob, expected)
+
+
+def _one_photon_events(energy_keV, eps, n=1, seed=3):
+    """One photon repeated n times, with events at the given Epsilon and a
+    common scattered direction and angle."""
+
+    rng = np.random.default_rng(seed)
+    lon, lat, phi = rng.uniform(-np.pi, np.pi), rng.uniform(-1, 1), rng.uniform(0, np.pi)
+    photons = _FakePhotonList(np.full(n, 0.3), np.full(n, 0.2), np.full(n, float(energy_keV)))
+    events = _FakeEventData(np.full(n, lon), np.full(n, lat), np.full(n, phi),
+                            energy_keV * (1 + np.asarray(eps, float)))
+    return photons, events
+
+
+class TestDifferentialEffectiveAreaNormalization:
+
+    def test_zero_outside_epsilon_axis_range(self):
+        """The Epsilon axis of _make_irf_hist spans [-0.5, 0.5]."""
+
+        model = IRFRelativeHistUnpolarized(_make_irf_hist())
+        eps = np.array([-3., -0.51, 0.51, 66.])
+        photons, events = _one_photon_events(300., eps, n=len(eps))
+
+        np.testing.assert_array_equal(model._differential_effective_area_cm2(photons, events), 0)
+
+    def test_unchanged_inside_epsilon_axis_range(self):
+        """Up to the edges of the axis, the density is the interpolated one."""
+
+        model = IRFRelativeHistUnpolarized(_make_irf_hist())
+        photons, events = _one_photon_events(300., [-0.5, -0.4999999, 0.4999999, 0.5], n=4)
+
+        result = model._differential_effective_area_cm2(photons, events)
+
+        assert np.all(result > 0)
+        np.testing.assert_allclose(result[[0, 3]], result[[1, 2]], rtol=1e-5)
+
+    def test_aeff_scales_density_by_aeff_over_irf_total(self):
+        eps = np.linspace(-0.4, 0.4, 7)
+        photons, events = _one_photon_events(300., eps, n=len(eps))
+
+        plain = IRFRelativeHistUnpolarized(_make_irf_hist())
+        reference = plain._differential_effective_area_cm2(photons, events)
+
+        aeff = _make_irf_hist().project('NuLambda', 'Ei')
+        aeff *= 2.
+        scaled = IRFRelativeHistUnpolarized(_make_irf_hist(), aeff=aeff)
+
+        np.testing.assert_allclose(scaled._differential_effective_area_cm2(photons, events),
+                                   2. * reference)
+
+    def test_aeff_equal_to_projection_changes_nothing(self):
+        eps = np.linspace(-0.4, 0.4, 7)
+        photons, events = _one_photon_events(300., eps, n=len(eps))
+
+        plain = IRFRelativeHistUnpolarized(_make_irf_hist())
+        same = IRFRelativeHistUnpolarized(_make_irf_hist(), aeff=_make_irf_hist().project('NuLambda', 'Ei'))
+
+        np.testing.assert_allclose(same._differential_effective_area_cm2(photons, events),
+                                   plain._differential_effective_area_cm2(photons, events))
+
+    def test_aeff_varying_with_ei(self):
+        """At an irf Ei center the ratio is exactly the factor of that Ei bin."""
+
+        factors = np.array([1., 3., 0.5])
+        aeff = _make_irf_hist().project('NuLambda', 'Ei')
+        aeff *= factors[None, :]
+
+        plain = IRFRelativeHistUnpolarized(_make_irf_hist())
+        scaled = IRFRelativeHistUnpolarized(_make_irf_hist(), aeff=aeff)
+
+        for ei, factor in zip(plain._diff_aeff.axes['Ei'].centers, factors):
+            photons, events = _one_photon_events(ei, [0.1, -0.2], n=2)
+            np.testing.assert_allclose(scaled._differential_effective_area_cm2(photons, events),
+                                       factor * plain._differential_effective_area_cm2(photons, events))
+
+    def test_zero_where_irf_total_is_zero(self):
+        template = _make_irf_hist()
+        irf = Histogram(template.axes, contents=np.zeros(template.axes.nbins), unit=u.cm * u.cm)
+        photons, events = _one_photon_events(300., [0.1], n=1)
+        model = IRFRelativeHistUnpolarized(irf, aeff=_make_aeff_hist())
+
+        result = model._differential_effective_area_cm2(photons, events)
+
+        assert np.all(np.isfinite(result)) and np.all(result == 0)
+
+    def test_density_not_scaled_by_selections(self):
+        """The cut scales the total area, not the density of events inside it."""
+
+        eps = np.array([0.1, 0.2])
+        photons, events = _one_photon_events(300., eps, n=2)  # Em = 330, 360 keV
+        cut = EnergySelector(u.Quantity([320., 1000.], u.keV))
+
+        for with_aeff in (False, True):
+            def kwargs():
+                return {'aeff': _make_irf_hist().project('NuLambda', 'Ei')} if with_aeff else {}
+
+            no_cut = IRFRelativeHistUnpolarized(_make_irf_hist(), **kwargs())
+            with_cut = IRFRelativeHistUnpolarized(_make_irf_hist(), selections=cut, **kwargs())
+
+            np.testing.assert_allclose(with_cut._differential_effective_area_cm2(photons, events),
+                                       no_cut._differential_effective_area_cm2(photons, events))
+            assert with_cut._effective_area_cm2(photons)[0] < no_cut._effective_area_cm2(photons)[0]
+
+    def test_integrates_to_total_effective_area(self):
+        """Monte Carlo integral over Em (within the Epsilon range), Phi_kin
+        and PsiChi of the density of one photon gives its effective area.
+        Uses a Theta axis covering [-pi, pi] and no area in the unphysical
+        region, so that the histogram content is fully reachable."""
+
+        axes = Axes([
+            HealpixAxis(nside=1, scheme='ring', coordsys=SpacecraftFrame(), label='NuLambda'),
+            Axis(np.geomspace(100, 1000, 4) * u.keV, label='Ei', scale='log'),
+            Axis(np.linspace(-0.5, 0.5, 9), label='Epsilon'),
+            Axis(np.linspace(0, 180, 13) * u.deg, label='Phi'),
+            Axis(np.linspace(-180, 180, 25) * u.deg, label='Theta'),
+            PolarizationAxis(np.linspace(0, 360, 13) * u.deg, convention=StereographicConvention(), label='Zeta'),
+        ])
+        phi = axes['Phi'].centers.to_value(u.rad)[:, None]
+        theta = axes['Theta'].centers.to_value(u.rad)[None, :]
+        physical = (phi + theta > 0) & (phi + theta < np.pi)
+        contents = np.random.default_rng(0).random(axes.nbins) * physical[None, None, None, :, :, None]
+        model = IRFRelativeHistUnpolarized(Histogram(axes, contents=contents, unit=u.cm * u.cm))
+
+        n, energy = 400000, 300.
+        rng = np.random.default_rng(1)
+        eps = rng.uniform(-0.8, 0.8, n)  # wider than the axis, to also check the cutoff
+        photons = _FakePhotonList(np.full(n, 0.3), np.full(n, 0.2), np.full(n, energy))
+        events = _FakeEventData(rng.uniform(-np.pi, np.pi, n), np.arcsin(rng.uniform(-1, 1, n)),
+                                rng.uniform(0, np.pi, n), energy * (1 + eps))
+
+        volume = (1.6 * energy) * np.pi * 4 * np.pi
+        integral = model._differential_effective_area_cm2(photons, events).mean() * volume
+        total = model._effective_area_cm2(_FakePhotonList(np.array([0.3]), np.array([0.2]),
+                                                          np.array([energy])))[0]
+
+        assert integral == pytest.approx(total, rel=0.05)
+
+
+class TestSelectionFractionBounded:
+    """The selected fraction divides by the same piecewise-linear
+    integral over the whole Epsilon axis, not by the plain sum of the
+    contents. With non-uniform Epsilon bins (narrow central bin, wide
+    neighbors, as in the real response files) the two differ a lot, and
+    dividing by the plain sum gave fractions above 1."""
+
+    eps_edges = np.array([-1., -0.5, -0.01, 0.01, 0.2])
+    eps_centers = 0.5 * (eps_edges[:-1] + eps_edges[1:])
+    eps_widths = np.diff(eps_edges)
+
+    def _fraction(self, lo_keV, hi_keV, ei_keV=100.):
+        content = np.array([[[0.1, 0.2, 1.0, 0.3]]])  # (npix=1, nEi=1, nEpsilon)
+        return IRFRelativeHistUnpolarized._selection_fraction(
+            content, np.array([ei_keV]), self.eps_centers, self.eps_widths, self.eps_edges,
+            EnergySelector(u.Quantity([lo_keV, hi_keV], u.keV)))[0, 0]
+
+    def test_partial_cut_fraction_at_most_one(self):
+        density = np.array([0.1, 0.2, 1.0, 0.3]) / self.eps_widths
+        piecewise_total = IRFRelativeHistUnpolarized._integrate_piecewise_linear(
+            density, self.eps_centers, self.eps_edges[0], self.eps_edges[-1])
+        assert piecewise_total > 2 * 1.6  # far from the plain sum of the contents (1.6)
+
+        fraction = self._fraction(90., 110.)
+        assert 0 < fraction <= 1
+
+    def test_full_cut_fraction_is_one(self):
+        assert self._fraction(0., 1e9) == pytest.approx(1.)
+
+    def test_fraction_increases_with_the_cut(self):
+        assert self._fraction(95., 105.) < self._fraction(90., 110.) < self._fraction(50., 120.) <= 1
