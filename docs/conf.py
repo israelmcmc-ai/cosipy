@@ -45,39 +45,7 @@ exclude_patterns = ['_build', 'Thumbs.db', '.DS_Store']
 # The master toctree document.
 master_doc = 'index'
 
-# mock dependencies so we don't have to install them
-autodoc_mock_imports = ["histpy",
-                        'threeML',
-                        'astromodels',
-                        'past',
-                        'numpy',
-                        'h5py',
-                        'astropy',
-                        'healpy',
-                        'mhealpy',
-                        'sparse',
-                        'matplotlib',
-                        'yaml',
-                        'scoords',
-                        'pandas',
-                        'tqdm',
-                        'scipy',
-                        'psutil',
-                        'awscli',
-                        'yayc',
-                        'iminuit'
-                        ]
-
-# There seems to be a conflict between unittest.mock (used by sphinx) and metaclasses
-# The cosipy.threeml.custom_functions.Band_Eflux includes a metaclass from
-# astromodels.functions.function, so we mock that one manually with the mock package
-import mock
-
-MOCK_MODULES = ['astromodels.functions.function']
-for mod_name in MOCK_MODULES:
-    sys.modules[mod_name] = mock.Mock()
-
-# intersphinx for mocked dependencies
+# Intersphinx links for dependencies
 
 intersphinx_mapping = {
     'histpy': ('https://histpy.readthedocs.io/en/latest', None),
