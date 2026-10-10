@@ -385,12 +385,13 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
         ``Em = Ei*(1 + Epsilon)`` falls within ``selector``'s ranges,
         evaluated at each of ``target_ei_keV``'s *exact* values.
 
-        Within a single ``Ei`` value, the fraction is computed by
-        linearly interpolating between ``Epsilon`` bin centers -- see
-        :meth:`_integrate_piecewise_linear` -- so for **non-uniform**
-        ``Epsilon`` binning it is only an approximation when a cut
-        boundary lands strictly inside a bin; a cut that fully includes
-        or excludes a bin is always exact.
+        Within a single ``Ei`` value, both the selected part and the
+        total are integrals over ``Epsilon`` of the density linearly
+        interpolated between bin centers (and flat up to the axis
+        edges) -- see :meth:`_integrate_piecewise_linear` -- the same
+        model used to evaluate the differential effective area, so the
+        fraction is never above 1. With non-uniform ``Epsilon`` bins
+        this total differs slightly from the plain sum of the contents.
 
         Parameters
         ----------
@@ -419,7 +420,8 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
         for i, ei in enumerate(target_ei_keV):
             content_i = content_vs_epsilon[:, i, :]
             density_i = content_i / epsilon_widths[None, :]
-            total_i = content_i.sum(axis=-1)
+            total_i = IRFRelativeHistUnpolarized._integrate_piecewise_linear(
+                density_i, epsilon_centers, epsilon_edges[0], epsilon_edges[-1])
 
             selected_total = np.zeros(npix)
 
@@ -536,9 +538,12 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
         # grid one Epsilon bin center at a time, so the result stays on
         # irf's own native Epsilon binning.
         content_vs_epsilon = np.empty((len(nulambda_dir), len(target_ei_keV), len(epsilon_centers)))
+        # In chunks of NuLambda, since interp()'s temporary arrays for the
+        # whole grid at once take several GB
         for k, eps_k in enumerate(epsilon_centers):
-            eps_mesh = np.full_like(ei_mesh, eps_k)
-            content_vs_epsilon[:, :, k] = irf_vs_epsilon.interp(photon_dir, ei_mesh, eps_mesh)
+            for rows in np.array_split(np.arange(len(nulambda_dir)), 16):
+                eps_mesh = np.full_like(ei_mesh[rows], eps_k)
+                content_vs_epsilon[rows, :, k] = irf_vs_epsilon.interp(photon_dir[rows], ei_mesh[rows], eps_mesh)
 
         fraction = IRFRelativeHistUnpolarized._selection_fraction(
             content_vs_epsilon, target_ei_keV, epsilon_centers, epsilon_widths, epsilon_edges, selector)

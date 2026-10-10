@@ -699,3 +699,36 @@ class TestDifferentialEffectiveAreaNormalization:
                                                           np.array([energy])))[0]
 
         assert integral == pytest.approx(total, rel=0.05)
+
+
+class TestSelectionFractionBounded:
+    """The selected fraction divides by the same piecewise-linear
+    integral over the whole Epsilon axis, not by the plain sum of the
+    contents. With non-uniform Epsilon bins (narrow central bin, wide
+    neighbors, as in the real response files) the two differ a lot, and
+    dividing by the plain sum gave fractions above 1."""
+
+    eps_edges = np.array([-1., -0.5, -0.01, 0.01, 0.2])
+    eps_centers = 0.5 * (eps_edges[:-1] + eps_edges[1:])
+    eps_widths = np.diff(eps_edges)
+
+    def _fraction(self, lo_keV, hi_keV, ei_keV=100.):
+        content = np.array([[[0.1, 0.2, 1.0, 0.3]]])  # (npix=1, nEi=1, nEpsilon)
+        return IRFRelativeHistUnpolarized._selection_fraction(
+            content, np.array([ei_keV]), self.eps_centers, self.eps_widths, self.eps_edges,
+            EnergySelector(u.Quantity([lo_keV, hi_keV], u.keV)))[0, 0]
+
+    def test_partial_cut_fraction_at_most_one(self):
+        density = np.array([0.1, 0.2, 1.0, 0.3]) / self.eps_widths
+        piecewise_total = IRFRelativeHistUnpolarized._integrate_piecewise_linear(
+            density, self.eps_centers, self.eps_edges[0], self.eps_edges[-1])
+        assert piecewise_total > 2 * 1.6  # far from the plain sum of the contents (1.6)
+
+        fraction = self._fraction(90., 110.)
+        assert 0 < fraction <= 1
+
+    def test_full_cut_fraction_is_one(self):
+        assert self._fraction(0., 1e9) == pytest.approx(1.)
+
+    def test_fraction_increases_with_the_cut(self):
+        assert self._fraction(95., 105.) < self._fraction(90., 110.) < self._fraction(50., 120.) <= 1
