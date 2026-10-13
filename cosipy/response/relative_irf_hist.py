@@ -55,9 +55,18 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
 
     On construction the input histogram is validated, its axis units
     are standardized (energies to keV, angles to radians, contents to
-    cm^2) and then divided by the phase-space volume of each bin to
-    produce a differential effective area with implicit units of
-    ``cm^2 / sr / rad / keV``. The polarization convention carried by
+    cm^2), and it is divided by the phase-space volume of each bin and
+    normalized, per ``(NuLambda, Ei)``, so that its interpolant
+    integrates to one over ``Epsilon``, ``Phi``, ``Theta`` and
+    ``Zeta``. The result is stored as ``_event_prob``, the probability
+    density of an event (``Em``, ``Phi``, ``PsiChi``) given the photon
+    (``NuLambda``, ``Ei``), with implicit units of
+    ``1 / sr / rad / keV``. The total effective area of the photon
+    (``aeff``, or the ``NuLambda``/``Ei`` projection of ``irf``) is
+    stored separately, so that the differential effective area is that
+    area times the event probability. Photons outside the range of the
+    ``Ei`` axis get zero area and probability. The polarization
+    convention carried by
     the ``Zeta`` axis is preserved as :attr:`_pol_convention` so it
     can be re-applied when translating event directions into the
     relative coordinate system.
@@ -81,10 +90,9 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
         effective area is typically cheaper to compute/store at higher
         resolution than the full differential response. If not
         provided (the default), the total effective area is obtained
-        by projecting ``irf`` onto its own ``NuLambda``/``Ei`` axes, as
-        before. When given, the differential effective area is rescaled
-        by the ratio of this total to ``irf``'s own, so that it still
-        integrates to this total effective area.
+        by projecting ``irf`` onto its own ``NuLambda``/``Ei`` axes. The
+        event probability does not depend on it, since ``irf`` is
+        normalized.
     copy : bool, optional
         If True (default) the input histogram(s) are copied before
         their axes and contents are modified in place. Set to False to
@@ -114,7 +122,10 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
         Measured-energy cut(s) to bake into the total effective area
         (:attr:`_tot_aeff`), so it matches an equivalent cut already
         applied to the event data being fit (e.g. via the same
-        ``EnergySelector``). Only ``EnergySelector`` is currently
+        ``EnergySelector``). The total effective area before the cut is
+        kept in ``_aeff_unselected``, and the event probability is divided by the
+        selected fraction (``_tot_aeff / _aeff_unselected``) to make it conditional on passing the cut.
+        The differential effective area is not scaled by it. Only ``EnergySelector`` is currently
         supported; anything else raises ``TypeError``. If a tuple is
         given, the cuts combine with OR semantics (unioned via
         ``EnergySelector.union``) -- i.e. each entry is treated as an
@@ -167,6 +178,11 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
 
         See the class docstring for a description of the expected axes
         and units.
+
+        ``irf`` is normalized in place (it is the ``_event_prob`` attribute
+        afterwards), without full-size temporary arrays. Anything that
+        needs its raw contents (the total effective area and the energy
+        selection) is computed before.
 
         Parameters
         ----------
@@ -250,30 +266,22 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
         # Get the total effective area
         if aeff is not None:
             self._tot_aeff = self._standardize_aeff(aeff, copy) # cm^2
-            # Kept before any energy selection, and together with irf's own
-            # total, to normalize the differential effective area
-            self._aeff = self._tot_aeff
-            self._irf_tot_aeff = irf.project('NuLambda','Ei') # cm^2
         else:
             self._tot_aeff = irf.project('NuLambda','Ei') # cm^2
-            self._aeff = None
-            self._irf_tot_aeff = None
 
-        if selections is not None and not isinstance(selections, tuple):
-            selections = (selections,)
+        # Total effective area before any energy selection
+        self._aeff_unselected = self._tot_aeff
 
-        for sel in selections or ():
-            if not isinstance(sel, EnergySelector):
-                raise TypeError(f"IRFRelativeHistUnpolarized only supports EnergySelector "
-                                 f"selections currently, got {type(sel)}")
+        combined_selector = self._combine_selections(selections)
 
-        if selections:
-            combined_selector = functools.reduce(EnergySelector.union, selections)
+        if combined_selector is not None:
             self._tot_aeff = self._apply_energy_selection(irf, self._tot_aeff, combined_selector,
                                                             same_grid = aeff is None)
 
+        # The divisions below are in place, since the contents are large
+
         # Phase space
-        # Final content units will be cm^2/sr/rad/keV
+        # Final content units will be 1/sr/rad/keV
         phi_edges_mesh, arm_edges_mesh, az_edges_mesh = np.meshgrid(axes['Phi'].edges,
                                                                     axes['Theta'].edges,
                                                                     axes['Zeta'].edges, indexing='ij')
@@ -299,7 +307,7 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
         # above produce 0/0 = NaN there if the contents are exactly zero,
         # or +-inf if they are not (e.g. due to smoothing or interpolation
         # when the histogram was built). Replace both with the physically
-        # correct value of zero differential effective area, so these bins
+        # correct value of zero density, so these bins
         # don't poison interpolation for nearby physical events. Note that
         # the default posinf/neginf of nan_to_num would instead turn inf
         # into the largest finite float, which overflows to inf/NaN when
@@ -307,7 +315,16 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
         # nan_to_num would also allocate copies of the (large) contents.
         irf.contents[~np.isfinite(irf.contents)] = 0
 
-        self._diff_aeff = irf
+        # The density is linearly interpolated between bin centers when evaluated. With
+        # non-uniform bins that interpolant doesn't integrate to the bin contents (e.g. it
+        # over-integrates the tails of a peaked Theta distribution), so normalize by its
+        # actual integral instead.
+        integral = self._interpolant_integral(irf, phase_space_em, phase_space_cds)
+        inv_integral = np.divide(1., integral, out=np.zeros_like(integral), where=integral > 0)
+        np.multiply(irf.contents, inv_integral[:, :, None, None, None, None], out=irf.contents)
+
+        self._event_prob = irf
+        self._has_selection = combined_selector is not None
 
         # Extra params
         self._nthreads = nthreads
@@ -321,7 +338,87 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
         ``Epsilon``, ``Phi``, ``Theta`` and ``Zeta`` (rad), without
         units. The total effective area might use a finer ``Ei`` grid.
         """
-        return self._diff_aeff.axes
+        return self._event_prob.axes
+
+    @staticmethod
+    def _interpolant_integral(density: Histogram, phase_space_em: np.ndarray,
+                              phase_space_cds: np.ndarray) -> np.ndarray:
+        """
+        Integral, over the data space within the axes' ranges, of the
+        ``density`` as evaluated by ``interp()`` (multilinear between bin
+        centers, flat beyond the first/last center), per (``NuLambda``,
+        ``Ei``).
+
+        The interpolant is a sum of products of 1D "hat" functions, so its
+        integral over a bin factorizes: along each axis, ``M[b, i]`` is the
+        integral over bin ``b`` of the hat function of center ``i``. The
+        phase-space measure is taken as uniform within each bin.
+
+        Parameters
+        ----------
+        density : histpy.Histogram
+            Density with axes ``NuLambda, Ei, Epsilon, Phi, Theta, Zeta``.
+        phase_space_em : numpy.ndarray, shape (nEi, nEpsilon)
+            Phase space of each (``Ei``, ``Epsilon``) bin (``Ei_center * dEps``).
+        phase_space_cds : numpy.ndarray, shape (nPhi, nTheta, nZeta)
+            Phase space of each CDS bin.
+
+        Returns
+        -------
+        numpy.ndarray, shape (nNuLambda, nEi)
+        """
+
+        axes = density.axes
+        cds_labels = ['Epsilon', 'Phi', 'Theta', 'Zeta']
+
+        def hat_integrals(axis):
+            centers, edges = np.asarray(axis.centers), np.asarray(axis.edges)
+            unit = np.eye(len(centers))
+            return np.array([[IRFRelativeHistUnpolarized._integrate_piecewise_linear(unit[i], centers, lo, hi)
+                              for i in range(len(centers))]
+                             for lo, hi in zip(edges[:-1], edges[1:])])
+
+        m_eps, m_phi, m_theta, m_zeta = (hat_integrals(axes[label]) for label in cds_labels)
+        widths = [np.asarray(axes[label].widths) for label in cds_labels]
+
+        # Phase space per unit coordinate volume of each bin
+        measure_em = phase_space_em / widths[0][None, :]
+        measure_cds = phase_space_cds / (widths[1][:, None, None] * widths[2][None, :, None] * widths[3][None, None, :])
+
+        integral = np.empty(density.contents.shape[:2])
+        for pix, d in enumerate(density.contents):
+            d = np.einsum('ai,eijkl->eajkl', m_eps, d)
+            d = np.einsum('bj,eajkl->eabkl', m_phi, d)
+            d = np.einsum('ck,eabkl->eabcl', m_theta, d)
+            d = np.einsum('dl,eabcl->eabcd', m_zeta, d)
+            integral[pix] = np.einsum('eabcd,ea,bcd->e', d, measure_em, measure_cds)
+
+        return integral
+
+    @staticmethod
+    def _combine_selections(selections) -> Union[EnergySelector, None]:
+        """
+        Union of the ``selections`` (a single ``EnergySelector`` or a
+        tuple of them), or None if there are none.
+
+        Raises
+        ------
+        TypeError
+            If any selection is not an ``EnergySelector``.
+        """
+
+        if selections is None:
+            return None
+
+        if not isinstance(selections, tuple):
+            selections = (selections,)
+
+        for sel in selections:
+            if not isinstance(sel, EnergySelector):
+                raise TypeError(f"IRFRelativeHistUnpolarized only supports EnergySelector "
+                                 f"selections currently, got {type(sel)}")
+
+        return functools.reduce(EnergySelector.union, selections) if selections else None
 
     def _parallel_interp(self, hist, build_args, raw_arrays):
         """
@@ -343,8 +440,8 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
         Parameters
         ----------
         hist : histpy.Histogram
-            The histogram to interpolate (``self._tot_aeff`` or
-            ``self._diff_aeff``).
+            The histogram to interpolate (e.g. ``self._tot_aeff`` or
+            ``self._event_prob``).
         build_args : callable
             Takes the (possibly chunked) raw arrays and returns the
             positional arguments ``hist.interp()`` expects. This is
@@ -747,6 +844,57 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
 
         return aeff.to(u.cm * u.cm, copy=False).to(None, copy=False, update=False)
 
+    @staticmethod
+    def _open_h5_ei_range(filename, name: str, ei_min_keV: float, ei_max_keV: float) -> Histogram:
+        """
+        Read the histogram stored in group ``name`` of an HDF5 file,
+        loading only the ``Ei`` bins that overlap
+        ``[ei_min_keV, ei_max_keV]``, with an HDF5 hyperslab selection
+        rather than reading the whole contents.
+
+        Only the dense format (without overflow bins) is supported, and
+        ``sumw2`` is not read.
+
+        Raises
+        ------
+        ValueError
+            If the group is not in that format, or no ``Ei`` bin
+            overlaps the range.
+        """
+
+        with h5.File(filename, 'r') as f:
+            group = f[name]
+
+            if group.attrs.get('format', 'dense') != 'dense':
+                raise ValueError(f"Only the dense histogram format is supported to load a range of Ei, "
+                                 f"got '{group.attrs['format']}' in '{name}'")
+
+            axes = Axes.open(group['axes'])
+            ei_axis = axes['Ei']
+            ei_idx = axes.label_to_index('Ei')
+
+            if group['contents'].shape != tuple(axes.nbins):
+                raise ValueError(f"Histograms with overflow bins are not supported to load a range of Ei ('{name}')")
+
+            ei_edges = ei_axis.edges.to_value(u.keV)
+            keep = np.flatnonzero((ei_edges[1:] > ei_min_keV) & (ei_edges[:-1] < ei_max_keV))
+
+            if len(keep) == 0:
+                raise ValueError(f"No Ei bin of '{name}' overlaps [{ei_min_keV}, {ei_max_keV}] keV")
+
+            i0, i1 = keep[0], keep[-1] + 1
+
+            index = [slice(None)] * axes.ndim
+            index[ei_idx] = slice(i0, i1)
+            contents = group['contents'][tuple(index)]
+
+            unit = u.Unit(group.attrs['unit']) if 'unit' in group.attrs else None
+
+        new_ei_axis = Axis(ei_axis.edges[i0:i1 + 1], label=ei_axis.label, scale=ei_axis.axis_scale)
+        new_axes = Axes([new_ei_axis if i == ei_idx else axis for i, axis in enumerate(axes)])
+
+        return Histogram(new_axes, contents=contents, unit=unit, copy_contents=False)
+
     @classmethod
     def from_h5(cls, filename, *args, **kwargs):
         """
@@ -760,6 +908,18 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
         via ``*args``/``**kwargs``, in which case that value takes
         precedence and the file is not checked for an ``"AEFF"``
         group.
+
+        If ``selections`` is given (as a keyword argument), only the
+        ``Ei`` bins that can produce a measured energy inside the
+        selection are read from the file. A bin ``[a, b)`` can produce
+        ``Em`` between ``a*(1 + eps_min)`` and ``b*(1 + eps_max)``, with
+        ``eps_min``/``eps_max`` the edges of the ``Epsilon`` axis. The
+        ``AEFF`` bins are read where they overlap the ``Ei`` range
+        loaded for ``IRF``. Photons outside the loaded range have zero
+        effective area and event probability, and those in the lowest and highest
+        bins are interpolated with the neighboring bin missing, so
+        they differ slightly from a full load. Only the dense
+        format is supported in this case.
 
         Parameters
         ----------
@@ -781,23 +941,52 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
             disk.
         """
 
+        selector = cls._combine_selections(kwargs.get('selections'))
+
+        if selector is None:
+            def open_irf():
+                return Histogram.open(filename, "IRF")
+
+            def open_aeff(irf):
+                return Histogram.open(filename, "AEFF")
+        else:
+            ranges = selector.energy_ranges_keV
+
+            with h5.File(filename, 'r') as f:
+                epsilon_edges = u.Quantity(Axes.open(f['IRF/axes'])['Epsilon'].edges).to_value('')
+
+            # Em in [a*(1 + eps_min), b*(1 + eps_max)] for Ei in [a, b)
+            ei_min = ranges[:, 0].min() / (1 + epsilon_edges[-1])
+            ei_max = ranges[:, 1].max() / (1 + epsilon_edges[0]) if epsilon_edges[0] > -1 else np.inf
+
+            def open_irf():
+                return cls._open_h5_ei_range(filename, "IRF", ei_min, ei_max)
+
+            def open_aeff(irf):
+                ei_edges = irf.axes['Ei'].edges.to_value(u.keV)
+                return cls._open_h5_ei_range(filename, "AEFF", ei_edges[0], ei_edges[-1])
+
+        irf = open_irf()
+
         if 'aeff' not in kwargs and len(args) == 0:
             with h5.File(filename, 'r') as f:
                 if 'AEFF' in f:
-                    kwargs['aeff'] = Histogram.open(filename, 'AEFF')
+                    kwargs['aeff'] = open_aeff(irf)
 
         if len(args) < 2:
             kwargs.setdefault('copy', False)
 
-        return cls(Histogram.open(filename, "IRF"), *args, **kwargs)
+        return cls(irf, *args, **kwargs)
 
     def _effective_area_cm2(self, photons: PhotonListWithDirectionAndEnergyInSCFrameInterface) -> Iterable[float]:
         """
-        Total effective area, in cm^2, for each incident photon.
+        Total effective area, in cm^2, for each incident photon, after
+        any energy ``selections``.
 
-        Interpolates the ``NuLambda``/``Ei`` projection of the full
-        response at the direction and energy of each photon in the
-        list. See :meth:`_parallel_interp` for how this is (optionally)
+        Interpolates the total effective area (``_tot_aeff``) at the
+        direction and energy of each photon in the list. It is zero for
+        photons outside the range of the ``Ei`` axis. See
+        :meth:`_parallel_interp` for how this is (optionally)
         parallelized over threads.
 
         Parameters
@@ -811,6 +1000,22 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
             One effective-area value per photon, in cm^2.
         """
 
+        return self._interp_aeff(self._tot_aeff, photons)
+
+    def _effective_area_cm2_unselected(self, photons: PhotonListWithDirectionAndEnergyInSCFrameInterface) -> Iterable[float]:
+        """
+        Same as :meth:`_effective_area_cm2`, but before any energy
+        ``selections``.
+        """
+
+        return self._interp_aeff(self._aeff_unselected, photons)
+
+    def _interp_aeff(self, aeff: Histogram, photons: PhotonListWithDirectionAndEnergyInSCFrameInterface) -> np.ndarray:
+        """
+        ``aeff`` (axes ``['NuLambda', 'Ei']``) interpolated at each
+        photon, and zero outside the range of its ``Ei`` axis.
+        """
+
         photon_lon_rad, photon_lat_rad, photon_energy_keV = self._photon_list_to_raw_values(photons)
 
         def build_args(lon_rad, lat_rad, energy_keV):
@@ -818,8 +1023,21 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
                                                      lat=Quantity(lat_rad, 'rad', copy=False))
             return photon_dir, energy_keV
 
-        return self._parallel_interp(self._tot_aeff, build_args,
-                                     (photon_lon_rad, photon_lat_rad, photon_energy_keV))
+        values = np.asarray(self._parallel_interp(aeff, build_args,
+                                                  (photon_lon_rad, photon_lat_rad, photon_energy_keV)))
+
+        return np.where(self._in_ei_range(aeff, photon_energy_keV), values, 0.0)
+
+    @staticmethod
+    def _in_ei_range(hist: Histogram, energy_keV: np.ndarray) -> np.ndarray:
+        """
+        Whether ``energy_keV`` is within the range of ``hist``'s ``Ei``
+        axis. ``interp()`` clamps to the edge bins instead.
+        """
+
+        ei_edges = hist.axes['Ei'].edges
+
+        return (energy_keV >= ei_edges[0]) & (energy_keV <= ei_edges[-1])
 
     @staticmethod
     def _photon_list_to_raw_values(photons:PhotonListWithDirectionAndEnergyInSCFrameInterface):
@@ -858,16 +1076,15 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
 
         return photon_lon_rad, photon_lat_rad, photon_energy_keV
 
-    def _differential_effective_area_cm2(self, photons:PhotonListWithDirectionAndEnergyInSCFrameInterface, events: EmCDSEventDataInSCFrameInterface) -> Iterable[float]:
+    def _interp_event_prob(self, photons: PhotonListWithDirectionAndEnergyInSCFrameInterface, events: EmCDSEventDataInSCFrameInterface) -> np.ndarray:
         """
-        Differential effective area, in cm^2 per unit phase-space
-        for each (photon, event) pair.
+        ``_event_prob`` interpolated at each (photon, event) pair, in
+        ``1 / sr / rad / keV``, without any selection fraction applied.
 
         For each pair the incident photon direction and energy are
         combined with the event's scattered direction, kinematic
         scattering angle and measured energy to build the six
-        relative-coordinate arguments consumed by the underlying
-        differential-area histogram:
+        relative-coordinate arguments consumed by the histogram:
 
         - ``NuLambda`` : photon direction in the spacecraft frame,
         - ``Ei`` : true photon energy in keV,
@@ -880,34 +1097,8 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
           source direction, in radians, expressed in the stored
           polarization convention.
 
-        Parameters
-        ----------
-        photons : PhotonListWithDirectionAndEnergyInSCFrameInterface
-            True photon directions and energies, one per event.
-        events : EmCDSEventDataInSCFrameInterface
-            Reconstructed events providing the scattered direction,
-            kinematics-derived scattering angle, and measured energy.
-
-        Returns
-        -------
-        Iterable[float]
-            Differential effective area interpolated at each
-            (photon, event) pair, in ``cm^2 / sr / rad / keV``.
-
-        Notes
-        -----
-        The result integrates over the data space (``Em``, ``Phi``,
-        ``PsiChi``) to the total effective area of the photon (before any
-        energy ``selections``, which are not applied to the density):
-
-        - It is zero where ``Epsilon`` is outside the range of the
-          ``Epsilon`` axis, instead of extending the edge bins' density.
-        - If a separate ``aeff`` was given, the density is multiplied by
-          ``aeff / irf_total``, with both interpolated at the photon's
-          direction and energy and ``irf_total`` being the
-          ``NuLambda``/``Ei`` projection of ``irf``, so that it follows
-          ``aeff`` instead of ``irf``'s (typically coarser) total. It is
-          zero where ``irf_total`` is zero.
+        It is zero where ``Epsilon`` or ``Ei`` are outside the range of
+        their axes, instead of extending the density of the edge bins.
         """
 
         photon_lon_rad, photon_lat_rad, photon_energy_keV = self._photon_list_to_raw_values(photons)
@@ -953,43 +1144,76 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
                                                             lat=Quantity(lat_rad, 'rad', copy=False))
             return photon_dir_chunk, energy_keV, eps, phi, theta, zeta_r
 
-        diff_aeff = np.asarray(self._parallel_interp(self._diff_aeff, build_args,
-                                                      (photon_lon_rad, photon_lat_rad, photon_energy_keV,
-                                                       epsilon, phi_kin_rad, theta_rad, zeta_rad)))
+        prob = np.asarray(self._parallel_interp(self._event_prob, build_args,
+                                                (photon_lon_rad, photon_lat_rad, photon_energy_keV,
+                                                 epsilon, phi_kin_rad, theta_rad, zeta_rad)))
 
         # interp() clamps to the edge bins, which would extend their density
         # indefinitely
-        epsilon_edges = self._diff_aeff.axes['Epsilon'].edges
-        diff_aeff = np.where((epsilon >= epsilon_edges[0]) & (epsilon <= epsilon_edges[-1]), diff_aeff, 0.0)
+        epsilon_edges = self._event_prob.axes['Epsilon'].edges
+        in_range = ((epsilon >= epsilon_edges[0]) & (epsilon <= epsilon_edges[-1])
+                    & self._in_ei_range(self._event_prob, photon_energy_keV))
 
-        if self._aeff is not None:
-            def build_args_aeff(lon_rad, lat_rad, energy_keV):
-                photon_dir_chunk = UnitSphericalRepresentation(lon=Quantity(lon_rad, 'rad', copy=False),
-                                                                lat=Quantity(lat_rad, 'rad', copy=False))
-                return photon_dir_chunk, energy_keV
+        return np.where(in_range, prob, 0.0)
 
-            raw_photon = (photon_lon_rad, photon_lat_rad, photon_energy_keV)
-            aeff = np.asarray(self._parallel_interp(self._aeff, build_args_aeff, raw_photon))
-            irf_aeff = np.asarray(self._parallel_interp(self._irf_tot_aeff, build_args_aeff, raw_photon))
-            diff_aeff = diff_aeff * np.divide(aeff, irf_aeff, out=np.zeros_like(aeff), where=irf_aeff > 0)
+    def _differential_effective_area_cm2(self, photons:PhotonListWithDirectionAndEnergyInSCFrameInterface, events: EmCDSEventDataInSCFrameInterface) -> Iterable[float]:
+        """
+        Differential effective area, in cm^2 per unit phase-space
+        for each (photon, event) pair.
 
-        return diff_aeff
+        This is the total effective area of the photon before any
+        energy ``selections`` (:meth:`_effective_area_cm2_unselected`)
+        times the interpolated event probability density
+        (``_event_prob``), so it integrates over the data space
+        (``Em``, ``Phi``, ``PsiChi``) to that effective area. The
+        selections scale the area but not the density, i.e. the result
+        is not conditional on passing them. See
+        :meth:`_interp_event_prob` for the relative coordinates used.
 
+        Parameters
+        ----------
+        photons : PhotonListWithDirectionAndEnergyInSCFrameInterface
+            True photon directions and energies, one per event.
+        events : EmCDSEventDataInSCFrameInterface
+            Reconstructed events providing the scattered direction,
+            kinematics-derived scattering angle, and measured energy.
+
+        Returns
+        -------
+        Iterable[float]
+            Differential effective area at each (photon, event) pair,
+            in ``cm^2 / sr / rad / keV``. It is zero where ``Epsilon``
+            or ``Ei`` are outside the range of their axes.
+        """
+
+        return self._effective_area_cm2_unselected(photons) * self._interp_event_prob(photons, events)
 
     def _event_probability(self, photons: PhotonListWithDirectionAndEnergyInSCFrameInterface, events: EmCDSEventDataInSCFrameInterface) -> Iterable[float]:
         """
-        Differential effective area divided by the total effective area.
+        Probability density, in ``1 / sr / rad / keV``, of each event
+        given its photon, normalized over the data space (``Em``,
+        ``Phi``, ``PsiChi``).
 
-        Where the interpolated total effective area is zero (e.g. photon
-        energy or direction outside the region covered by the histogram)
-        the event is impossible, so the probability is zero. The default
-        implementation would give 0/0 = NaN or x/0 = inf there.
+        If energy ``selections`` were given, the probability is
+        conditional on the event passing them: the interpolated
+        ``_event_prob`` is divided by the selected fraction of the
+        photon's effective area (``_effective_area_cm2`` over
+        ``_effective_area_cm2_unselected``). Where that fraction is zero
+        (e.g. photon energy or direction outside the region covered by
+        the histogram) the event is impossible, so the probability is
+        zero instead of 0/0 = NaN or x/0 = inf.
         """
 
-        diff = np.asarray(self._differential_effective_area_cm2(photons, events), dtype=float)
-        aeff = np.asarray(self._effective_area_cm2(photons), dtype=float)
+        prob = self._interp_event_prob(photons, events)
 
-        return np.divide(diff, aeff, out=np.zeros_like(diff), where=aeff > 0)
+        if not self._has_selection:
+            return prob
+
+        selected = self._effective_area_cm2(photons)
+        total = self._effective_area_cm2_unselected(photons)
+
+        # prob / (selected / total)
+        return np.divide(prob * total, selected, out=np.zeros_like(prob), where=selected > 0)
 
     def _random_events(self, photons: PhotonListWithDirectionInSCFrameInterface) -> EventDataInterface:
         """

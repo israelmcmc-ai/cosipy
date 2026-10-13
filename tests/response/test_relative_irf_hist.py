@@ -10,6 +10,7 @@ from scoords import SpacecraftFrame
 from cosipy.event_selection.distance_selection import DistanceSelector
 from cosipy.event_selection.energy_selection import EnergySelector
 from cosipy.polarization import PolarizationAxis, StereographicConvention
+from cosipy.response.relative_coordinates import RelativeCDSCoordinates
 from cosipy.response.relative_irf_hist import IRFRelativeHistUnpolarized
 
 
@@ -388,7 +389,7 @@ class TestEnergySelections:
             _make_irf_hist(seed=6),
             selections=EnergySelector(u.Quantity([150., 400.], u.keV)))
 
-        np.testing.assert_array_equal(cut._diff_aeff.contents, no_cut._diff_aeff.contents)
+        np.testing.assert_array_equal(cut._event_prob.contents, no_cut._event_prob.contents)
 
     def test_narrow_cut_matches_exact_fraction_at_target_ei(self):
         """A narrow measured-energy cut, applied with a separate `aeff`
@@ -522,7 +523,7 @@ class TestUnphysicalBins:
     def test_nonzero_contents_in_zero_phase_space_bins_are_zeroed(self):
         model = IRFRelativeHistUnpolarized(_make_irf_hist())
 
-        diff_aeff = model._diff_aeff.contents
+        diff_aeff = model._event_prob.contents
 
         assert np.all(np.isfinite(diff_aeff))
         # Random contents in [0, 1) divided by finite phase spaces stay moderate
@@ -541,10 +542,22 @@ class TestZeroEffectiveArea:
     (diff. area / area) must be zero, not NaN/inf, otherwise a few NaNs in
     the per-event density break the likelihood fit."""
 
-    def test_event_probability_is_zero_where_effective_area_is_zero(self):
+    def test_differential_area_is_zero_where_effective_area_is_zero(self):
         aeff = _make_aeff_hist()
         aeff = Histogram(aeff.axes, contents=np.zeros(aeff.axes.nbins), unit=u.cm * u.cm)
         model = IRFRelativeHistUnpolarized(_make_irf_hist(), aeff=aeff)
+
+        photons, events = _make_photons_and_events(200)
+
+        diff = np.asarray(model._differential_effective_area_cm2(photons, events), dtype=float)
+
+        assert np.all(diff == 0)
+
+    def test_conditional_probability_is_zero_where_selected_area_is_zero(self):
+        """A cut that nothing passes: no NaN/inf, and zero probability."""
+
+        model = IRFRelativeHistUnpolarized(_make_irf_hist(),
+                                           selections=EnergySelector(u.Quantity([5000., 6000.], u.keV)))
 
         photons, events = _make_photons_and_events(200)
 
@@ -599,7 +612,7 @@ class TestDifferentialEffectiveAreaNormalization:
         assert np.all(result > 0)
         np.testing.assert_allclose(result[[0, 3]], result[[1, 2]], rtol=1e-5)
 
-    def test_aeff_scales_density_by_aeff_over_irf_total(self):
+    def test_aeff_scales_diff_aeff_and_not_probability(self):
         eps = np.linspace(-0.4, 0.4, 7)
         photons, events = _one_photon_events(300., eps, n=len(eps))
 
@@ -612,6 +625,8 @@ class TestDifferentialEffectiveAreaNormalization:
 
         np.testing.assert_allclose(scaled._differential_effective_area_cm2(photons, events),
                                    2. * reference)
+        np.testing.assert_allclose(scaled._event_probability(photons, events),
+                                   plain._event_probability(photons, events))
 
     def test_aeff_equal_to_projection_changes_nothing(self):
         eps = np.linspace(-0.4, 0.4, 7)
@@ -633,7 +648,7 @@ class TestDifferentialEffectiveAreaNormalization:
         plain = IRFRelativeHistUnpolarized(_make_irf_hist())
         scaled = IRFRelativeHistUnpolarized(_make_irf_hist(), aeff=aeff)
 
-        for ei, factor in zip(plain._diff_aeff.axes['Ei'].centers, factors):
+        for ei, factor in zip(plain._event_prob.axes['Ei'].centers, factors):
             photons, events = _one_photon_events(ei, [0.1, -0.2], n=2)
             np.testing.assert_allclose(scaled._differential_effective_area_cm2(photons, events),
                                        factor * plain._differential_effective_area_cm2(photons, events))
@@ -699,6 +714,189 @@ class TestDifferentialEffectiveAreaNormalization:
                                                           np.array([energy])))[0]
 
         assert integral == pytest.approx(total, rel=0.05)
+
+
+def _make_physical_irf_hist(seed=0):
+    """Random contents, only in the physical region of Phi + Theta, and
+    zero in some (NuLambda, Ei) bins."""
+
+    irf = _make_irf_hist(seed=seed)
+    phi = irf.axes['Phi'].centers.to_value(u.rad)[:, None]
+    theta = irf.axes['Theta'].centers.to_value(u.rad)[None, :]
+    physical = (phi + theta > 0) & (phi + theta < np.pi)
+    contents = irf.contents * physical[None, None, None, :, :, None]
+    contents[0, 1] = 0
+    return Histogram(irf.axes, contents=contents, unit=u.cm * u.cm)
+
+
+def _phase_space(model):
+    axes = model.axes
+    phi, theta, zeta = np.meshgrid(axes['Phi'].edges, axes['Theta'].edges, axes['Zeta'].edges, indexing='ij')
+    cds = RelativeCDSCoordinates.get_relative_cds_phase_space(
+        phi[:-1, :-1, :-1], phi[1:, :-1, :-1], theta[:-1, :-1, :-1], theta[:-1, 1:, :-1],
+        zeta[:-1, :-1, :-1], zeta[:-1, :-1, 1:])
+    em = axes['Ei'].centers[:, None] * axes['Epsilon'].widths[None, :]
+    return em[None, :, :, None, None, None] * cds[None, None, None, :, :, :]
+
+
+class TestEventProbability:
+
+    def test_interpolated_probability_integrates_to_one(self):
+        """The probability as evaluated (multilinear interpolation between bin
+        centers, flat up to the axis edges) integrates to 1 per (NuLambda, Ei)
+        over Epsilon, Phi, Theta and Zeta. Splitting each bin at its center
+        makes the interpolant multilinear in every sub-cell, where the
+        midpoint rule is exact."""
+
+        irf = _make_physical_irf_hist()
+        model = IRFRelativeHistUnpolarized(irf)
+        prob = model._event_prob
+        labels = ['Epsilon', 'Phi', 'Theta', 'Zeta']
+
+        sub_edges = [np.unique(np.concatenate([np.asarray(prob.axes[l].edges), np.asarray(prob.axes[l].centers)]))
+                     for l in labels]
+        mids = [0.5 * (e[:-1] + e[1:]) for e in sub_edges]
+        widths = [np.diff(e) for e in sub_edges]
+        bins = [np.searchsorted(np.asarray(prob.axes[l].edges), m, side='right') - 1 for l, m in zip(labels, mids)]
+        mesh = np.meshgrid(*mids, indexing='ij')
+        sub_volume = np.einsum('a,b,c,d->abcd', *widths)
+
+        measure = _phase_space(model) / np.einsum('a,b,c,d->abcd', *[np.asarray(prob.axes[l].widths) for l in labels])
+
+        cds_axes = Axes([prob.axes[l] for l in labels])
+        nonzero = irf.contents.sum(axis=(2, 3, 4, 5)) > 0
+        for pix in range(prob.contents.shape[0]):
+            for e in range(prob.contents.shape[1]):
+                values = Histogram(cds_axes, contents=prob.contents[pix, e]).interp(*(m.ravel() for m in mesh))
+                weight = measure[0, e][np.ix_(*bins)]
+                integral = np.sum(values.reshape(mesh[0].shape) * weight * sub_volume)
+                assert integral == pytest.approx(1. if nonzero[pix, e] else 0., abs=1e-9)
+
+    def test_differential_area_is_unselected_area_times_probability(self):
+        photons, events = _make_photons_and_events(300)
+        cut = EnergySelector(u.Quantity([150., 400.], u.keV))
+
+        for kwargs in ({}, {'selections': cut}, {'aeff': _make_aeff_hist()},
+                       {'aeff': _make_aeff_hist(), 'selections': cut}):
+            model = IRFRelativeHistUnpolarized(_make_irf_hist(), **kwargs)
+            diff = np.asarray(model._differential_effective_area_cm2(photons, events))
+            prob = np.asarray(model._event_probability(photons, events))
+            aeff_unselected = np.asarray(model._effective_area_cm2_unselected(photons))
+
+            if 'selections' not in kwargs:
+                np.testing.assert_allclose(aeff_unselected, model._effective_area_cm2(photons))
+                np.testing.assert_allclose(prob, diff / aeff_unselected)
+            else:
+                selected = np.asarray(model._effective_area_cm2(photons))
+                assert (selected > 0).any()
+                np.testing.assert_allclose((selected * prob)[selected > 0], diff[selected > 0])
+                assert np.all(prob[selected == 0] == 0)
+
+    def test_selection_does_not_scale_diff_but_conditions_probability(self):
+        eps = np.array([0.1, 0.2])
+        photons, events = _one_photon_events(300., eps, n=2)  # Em = 330, 360 keV
+        cut = EnergySelector(u.Quantity([320., 1000.], u.keV))
+
+        no_cut = IRFRelativeHistUnpolarized(_make_irf_hist())
+        with_cut = IRFRelativeHistUnpolarized(_make_irf_hist(), selections=cut)
+
+        np.testing.assert_allclose(with_cut._differential_effective_area_cm2(photons, events),
+                                   no_cut._differential_effective_area_cm2(photons, events))
+        fraction = with_cut._effective_area_cm2(photons)[0] / no_cut._effective_area_cm2(photons)[0]
+        assert 0 < fraction < 1
+        np.testing.assert_allclose(with_cut._event_probability(photons, events),
+                                   no_cut._event_probability(photons, events) / fraction)
+
+    def test_zero_outside_epsilon_axis_range(self):
+        model = IRFRelativeHistUnpolarized(_make_irf_hist())
+        photons, events = _one_photon_events(300., [-3., -0.51, 0.51, 66.], n=4)
+
+        np.testing.assert_array_equal(model._event_probability(photons, events), 0)
+
+    def test_zero_outside_ei_axis_range(self):
+        """The Ei axis of _make_irf_hist spans [100, 1000] keV."""
+
+        for kwargs in ({}, {'aeff': _make_aeff_hist()},  # aeff spans [50, 2000] keV
+                       {'selections': EnergySelector(u.Quantity([50., 5000.], u.keV))}):
+            model = IRFRelativeHistUnpolarized(_make_irf_hist(), **kwargs)
+
+            for energy in (99., 1001.):
+                photons, events = _one_photon_events(energy, [0.1], n=1)
+
+                assert model._event_probability(photons, events)[0] == 0
+                assert model._differential_effective_area_cm2(photons, events)[0] == 0
+
+            photons, events = _one_photon_events(500., [0.1], n=1)
+            assert model._event_probability(photons, events)[0] > 0
+
+        model = IRFRelativeHistUnpolarized(_make_irf_hist())
+        photons, _ = _one_photon_events(99., [0.1])
+        assert model._effective_area_cm2(photons)[0] == 0
+        photons, _ = _one_photon_events(1001., [0.1])
+        assert model._effective_area_cm2(photons)[0] == 0
+
+
+class TestFromH5EiRange:
+
+    @staticmethod
+    def _write(path):
+        _make_irf_hist().write(str(path), name="IRF", overwrite=True)
+        _make_aeff_hist().write(str(path), name="AEFF", overwrite=True)
+
+    def test_without_selections_loads_full_axes(self, tmp_path):
+        path = tmp_path / "irf.h5"
+        self._write(path)
+
+        model = IRFRelativeHistUnpolarized.from_h5(path)
+
+        np.testing.assert_allclose(model.axes['Ei'].edges, np.geomspace(100, 1000, 4))
+        np.testing.assert_allclose(model._tot_aeff.axes['Ei'].edges, np.geomspace(50, 2000, 6))
+
+    def test_selections_load_only_needed_ei_bins(self, tmp_path):
+        """Ei edges 100, 215.4, 464.2, 1000; Epsilon in [-0.5, 0.5]. A cut at
+        [400, 450] keV is reached from Ei in (400/1.5, 450/0.5) = (266.7, 900)."""
+
+        path = tmp_path / "irf.h5"
+        self._write(path)
+        cut = EnergySelector(u.Quantity([400., 450.], u.keV))
+
+        model = IRFRelativeHistUnpolarized.from_h5(path, selections=cut)
+
+        np.testing.assert_allclose(model.axes['Ei'].edges, np.geomspace(100, 1000, 4)[1:])
+        # aeff edges 50, 104.6, 218.7, 457.3, 956.4, 2000: those overlapping [215.4, 1000], plus the refinement near the cut
+        np.testing.assert_allclose(model._tot_aeff.axes['Ei'].edges[[0, -1]], np.geomspace(50, 2000, 6)[[1, 5]])
+
+    def test_high_cut_drops_low_ei_bins_and_matches_full_load(self, tmp_path):
+        path = tmp_path / "irf.h5"
+        self._write(path)
+
+        cut = (EnergySelector(u.Quantity([500., 800.], u.keV)),)
+        partial = IRFRelativeHistUnpolarized.from_h5(path, selections=cut)
+        full = IRFRelativeHistUnpolarized(Histogram.open(path, "IRF"), aeff=Histogram.open(path, "AEFF"),
+                                          selections=cut)
+
+        assert partial.axes['Ei'].nbins < full.axes['Ei'].nbins
+
+        # Inside the centers of the kept bins, where interpolation does not
+        # use the dropped neighbors
+        centers = partial.axes['Ei'].centers
+        photons, events = _make_photons_and_events(400)
+        energy = np.random.default_rng(5).uniform(centers[0], centers[-1], 400)
+        photons = _FakePhotonList(photons.direction_lon_rad_sc, photons.direction_lat_rad_sc, energy)
+        events.energy_keV = energy * (1 + np.random.default_rng(6).uniform(-0.4, 0.4, 400))
+
+        for method in ('_differential_effective_area_cm2', '_event_probability'):
+            np.testing.assert_allclose(getattr(partial, method)(photons, events),
+                                       getattr(full, method)(photons, events), rtol=1e-10)
+        np.testing.assert_allclose(partial._effective_area_cm2(photons), full._effective_area_cm2(photons),
+                                   rtol=1e-10)
+
+    def test_selection_beyond_all_bins_raises(self, tmp_path):
+        path = tmp_path / "irf.h5"
+        self._write(path)
+
+        with pytest.raises(ValueError):
+            IRFRelativeHistUnpolarized.from_h5(path, selections=EnergySelector(u.Quantity([1e5, 2e5], u.keV)))
 
 
 class TestSelectionFractionBounded:
