@@ -163,8 +163,11 @@ if it's blocked, say so and validate with synthetic histograms.
   (`irf_mode` = `hist_simple` / `hist_nn` / `nn`).
 
 - `interpolation='linear'` (default) interpolates the density between bin
-  centers; its normalization is exact only at `Ei` centers and uniform phase
-  space within bins. `interpolation='nearest'` uses the value of the bin each
+  centers; it is normalized with the true phase-space measure
+  (`sin(phi + theta) dphi dtheta dzeta`, `_cds_marginal`: hat functions at
+  `_CDS_SUBDIVISIONS` = 32 sub-bins per `Phi`/`Theta` bin times the exact
+  sub-bin phase space, error ~1e-4). A uniform measure within bins gave
+  -2.4% to +1.1% errors on the real `hist_simple` response. `interpolation='nearest'` uses the value of the bin each
   (photon, event) lands in (times `Ei_center/Ei`): the event probability
   integrates to exactly 1 for any photon, and the selected area is the
   unselected area times a fraction computed from the photon's own
@@ -199,7 +202,7 @@ if it's blocked, say so and validate with synthetic histograms.
   centers and flat beyond the first/last center. It is used for the hat
   integrals. Integrating over the full range is **not** exactly the content
   sum when bins are non-uniform, which is why the normalization uses the
-  interpolant's integral.
+  interpolant's integral (with the true measure, see above).
 
 ### Lessons from the normalization and the selection
 

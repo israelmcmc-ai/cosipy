@@ -80,8 +80,10 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
     ``Ei`` when evaluated, since ``dEm = Ei * dEpsilon``. Every ``Ei``
     slice is then normalized over ``Epsilon``, and so is any interpolation between
     them: the event probability integrates to one for photons at any ``Ei`` and
-    ``NuLambda``, assuming only that the phase space is uniform within each
-    bin. In the ``'nearest'`` mode the density
+    ``NuLambda``. The normalization uses the true phase space,
+    ``sin(phi + theta) dphi dtheta dzeta``, integrated over sub-bins of the
+    ``Phi`` and ``Theta`` bins, so it is exact up to the sub-bin resolution
+    (~1e-4). In the ``'nearest'`` mode the density
     is piecewise constant, the event probability is exactly normalized
     for any photon, and the selected effective area is exactly consistent
     with it.
@@ -175,6 +177,8 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
 
     event_data_type = EmCDSEventDataInSCFrameInterface
     photon_list_type = PhotonListWithDirectionAndEnergyInSCFrameInterface
+
+    _CDS_SUBDIVISIONS = 32
 
     def __init__(self,
                  irf: Histogram,
@@ -340,7 +344,7 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
             integral = self._nearest_proj.sum(axis=2)
         else:
             ei_centers = np.asarray(axes['Ei'].centers, dtype=float)
-            cds_marginal = self._cds_marginal(irf, phase_space_cds)
+            cds_marginal = self._cds_marginal(irf)
             hat_totals = self._hat_integrals(axes['Epsilon']).sum(axis=0)
             integral = ei_centers[None, :] * (cds_marginal @ hat_totals)
         inv_integral = np.divide(1., integral, out=np.zeros_like(integral), where=integral > 0)
@@ -395,26 +399,30 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
                          for lo, hi in zip(edges[:-1], edges[1:])])
 
     @staticmethod
-    def _cds_marginal(density: Histogram, phase_space_cds: np.ndarray) -> np.ndarray:
+    def _cds_marginal(density: Histogram) -> np.ndarray:
         """
         Integral over ``Phi``, ``Theta`` and ``Zeta`` of the ``density`` as
         evaluated by ``interp()`` (multilinear between bin centers, flat
-        beyond the first/last center), weighted by the phase space, per
-        (``NuLambda``, ``Ei``) and ``Epsilon`` center. It is linear in the
-        ``Epsilon`` hat function of each center, so the integral over any
-        ``Epsilon`` range is the sum of this times the integral of each hat.
+        beyond the first/last center), weighted by the true phase space
+        ``sin(phi + theta) dphi dtheta dzeta``, per (``NuLambda``, ``Ei``) and
+        ``Epsilon`` center. It is linear in the ``Epsilon`` hat function of
+        each center, so the integral over any ``Epsilon`` range is the sum of
+        this times the integral of each hat.
 
-        The interpolant is a sum of products of 1D hat functions, so its
-        integral over a bin factorizes: along each axis, ``m[b, j]`` is the
-        integral over bin ``b`` of the hat function of center ``j``. The
-        phase-space measure is taken as uniform within each bin.
+        The interpolant is a sum of products of 1D hat functions, so the
+        integral is a contraction of the density with one weight per
+        (``Phi``, ``Theta``, ``Zeta``) center. The phase space is uniform in
+        ``Zeta``, which then uses the exact integral of each hat function (see
+        :meth:`_hat_integrals`). ``Phi`` and ``Theta`` are split into
+        ``_CDS_SUBDIVISIONS`` sub-bins per bin, where the hat functions are
+        evaluated at the sub-bin centers and weighted by the exact phase space
+        of the sub-bin. The error decreases as the square of the number of
+        sub-bins, and it is ~1e-4 for the default.
 
         Parameters
         ----------
         density : histpy.Histogram
             Density with axes ``NuLambda, Ei, Epsilon, Phi, Theta, Zeta``.
-        phase_space_cds : numpy.ndarray, shape (nPhi, nTheta, nZeta)
-            Phase space of each CDS bin.
 
         Returns
         -------
@@ -422,13 +430,33 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
         """
 
         axes = density.axes
-        m_phi, m_theta, m_zeta = (IRFRelativeHistUnpolarized._hat_integrals(axes[label])
-                                  for label in ['Phi', 'Theta', 'Zeta'])
-        widths = [np.asarray(axes[label].widths) for label in ['Phi', 'Theta', 'Zeta']]
+        nsub = IRFRelativeHistUnpolarized._CDS_SUBDIVISIONS
 
-        # Phase space per unit coordinate volume of each bin
-        measure_cds = phase_space_cds / (widths[0][:, None, None] * widths[1][None, :, None] * widths[2][None, None, :])
-        weights = np.einsum('bj,ck,dl,bcd->jkl', m_phi, m_theta, m_zeta, measure_cds)
+        def sub_grid(axis):
+            edges = np.asarray(axis.edges, dtype=float)
+            sub_edges = np.concatenate([np.linspace(lo, hi, nsub + 1)[:-1]
+                                        for lo, hi in zip(edges[:-1], edges[1:])] + [edges[-1:]])
+            centers = np.asarray(axis.centers, dtype=float)
+            x = np.clip(0.5 * (sub_edges[1:] + sub_edges[:-1]), centers[0], centers[-1])
+            j = np.clip(np.searchsorted(centers, x, side='right') - 1, 0, centers.size - 2)
+            t = (x - centers[j]) / (centers[j + 1] - centers[j])
+            hats = np.zeros((x.size, centers.size))
+            hats[np.arange(x.size), j] = 1 - t
+            hats[np.arange(x.size), j + 1] += t
+            return sub_edges, hats
+
+        phi_edges, phi_hats = sub_grid(axes['Phi'])
+        theta_edges, theta_hats = sub_grid(axes['Theta'])
+        phi_mesh, theta_mesh = np.meshgrid(phi_edges, theta_edges, indexing='ij')
+
+        # Phase space per unit Zeta of each (Phi, Theta) sub-bin
+        phase_space = RelativeCDSCoordinates.get_relative_cds_phase_space(
+            phi_mesh[:-1, :-1], phi_mesh[1:, :-1], theta_mesh[:-1, :-1], theta_mesh[:-1, 1:],
+            np.zeros_like(phi_mesh[:-1, :-1]), np.ones_like(phi_mesh[:-1, :-1]))
+        phase_space = np.nan_to_num(np.asarray(phase_space, dtype=float))
+
+        zeta_hats = IRFRelativeHistUnpolarized._hat_integrals(axes['Zeta']).sum(axis=0)
+        weights = np.einsum('ab,aj,bk->jk', phase_space, phi_hats, theta_hats)[:, :, None] * zeta_hats
 
         return np.array([np.einsum('eijkl,jkl->ei', d, weights) for d in density.contents])
 

@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 
 import astropy.units as u
-from astropy.coordinates import UnitSphericalRepresentation
+from astropy.coordinates import CartesianRepresentation, UnitSphericalRepresentation
 from astropy.units import Quantity
 from histpy import Axis, Axes, HealpixAxis, Histogram
 from scoords import SpacecraftFrame
@@ -581,44 +581,59 @@ def _phase_space(model):
 class TestEventProbability:
 
     @staticmethod
-    def _density_on_sub_cells(model, lon, lat, energy, extra_eps_edges=()):
-        """The probability density of one photon, per unit Em as evaluated (the
-        interpolated table divided by the photon energy), at the midpoint of
-        sub-cells that split every Epsilon/Phi/Theta/Zeta bin at its center (and
-        Epsilon also at ``extra_eps_edges``), so the interpolant is multilinear in
-        each sub-cell and the midpoint rule is exact.
+    def _sub_cells(model, energy, extra_eps_edges=(), nsub=4):
+        """Sub-cells of the Epsilon, Phi, Theta and Zeta axes: Epsilon and Zeta are
+        split at the edges and centers (so the interpolant is multilinear in each
+        sub-cell), and each Phi and Theta bin into ``nsub`` sub-bins and at the centers.
 
-        Returns the density, the Epsilon midpoints, and the weight of each sub-cell
-        that integrates it over Em (``dEm = energy * dEpsilon``), Phi, Theta and
-        Zeta, with the phase space uniform within each bin.
+        Returns the midpoints of each axis and the weight of each sub-cell, which
+        integrates over the true measure of Em (``dEm = energy * dEpsilon``), Phi,
+        Theta and Zeta: ``sin(phi + theta) dphi dtheta dzeta``.
         """
 
         prob = model._event_prob
-        labels = ['Epsilon', 'Phi', 'Theta', 'Zeta']
-        sub_edges = [np.unique(np.concatenate([np.asarray(prob.axes[l].edges), np.asarray(prob.axes[l].centers)]
-                                              + ([np.asarray(extra_eps_edges)] if l == 'Epsilon' else [])))
-                     for l in labels]
-        sub_edges[0] = sub_edges[0][(sub_edges[0] >= prob.axes['Epsilon'].edges[0])
-                                    & (sub_edges[0] <= prob.axes['Epsilon'].edges[-1])]
-        mids = [0.5 * (e[:-1] + e[1:]) for e in sub_edges]
-        widths = [np.diff(e) for e in sub_edges]
-        bins = [np.searchsorted(np.asarray(prob.axes[l].edges), m, side='right') - 1 for l, m in zip(labels, mids)]
+
+        def split(label, n=1, extra=()):
+            axis = prob.axes[label]
+            edges = np.asarray(axis.edges)
+            sub = [np.linspace(lo, hi, n + 1) for lo, hi in zip(edges[:-1], edges[1:])]
+            e = np.unique(np.concatenate(sub + [np.asarray(axis.centers), np.asarray(extra, dtype=float)]))
+            return e[(e >= edges[0]) & (e <= edges[-1])]
+
+        eps_edges, phi_edges, theta_edges, zeta_edges = (split('Epsilon', extra=extra_eps_edges), split('Phi', nsub),
+                                                         split('Theta', nsub), split('Zeta'))
+        mids = [0.5 * (e[:-1] + e[1:]) for e in (eps_edges, phi_edges, theta_edges, zeta_edges)]
+
+        phi_lo, theta_lo = np.meshgrid(phi_edges[:-1], theta_edges[:-1], indexing='ij')
+        phi_hi, theta_hi = np.meshgrid(phi_edges[1:], theta_edges[1:], indexing='ij')
+        phase_space = RelativeCDSCoordinates.get_relative_cds_phase_space(
+            phi_lo, phi_hi, theta_lo, theta_hi, np.zeros_like(phi_lo), np.ones_like(phi_lo))
+        phase_space = np.nan_to_num(np.asarray(phase_space, dtype=float))
+
+        weight = (energy * np.diff(eps_edges)[:, None, None, None] * phase_space[None, :, :, None]
+                  * np.diff(zeta_edges)[None, None, None, :])
+
+        return mids, weight
+
+    @staticmethod
+    def _density_on_sub_cells(model, lon, lat, energy, extra_eps_edges=(), nsub=4):
+        """The probability density of one photon, per unit Em as evaluated (the
+        interpolated table divided by the photon energy), at the midpoint of the
+        sub-cells of :meth:`_sub_cells`. The midpoint rule converges as ``1 / nsub^2``,
+        and the error is ~1e-3 for the default.
+
+        Returns the density, the Epsilon midpoints, and the weight of each sub-cell.
+        """
+
+        mids, weight = TestEventProbability._sub_cells(model, energy, extra_eps_edges, nsub)
         mesh = np.meshgrid(*mids, indexing='ij')
         n = mesh[0].size
 
         photon_dir = _direction(np.full(n, lon), np.full(n, lat))
-        density = prob.interp(photon_dir, np.full(n, energy), *(m.ravel() for m in mesh)).reshape(mesh[0].shape)
+        density = model._event_prob.interp(photon_dir, np.full(n, energy),
+                                           *(m.ravel() for m in mesh)).reshape(mesh[0].shape)
         if model._interpolation == 'linear':
             density = density / energy
-
-        edges = np.meshgrid(prob.axes['Phi'].edges, prob.axes['Theta'].edges, prob.axes['Zeta'].edges, indexing='ij')
-        cds = RelativeCDSCoordinates.get_relative_cds_phase_space(
-            edges[0][:-1, :-1, :-1], edges[0][1:, :-1, :-1], edges[1][:-1, :-1, :-1], edges[1][:-1, 1:, :-1],
-            edges[2][:-1, :-1, :-1], edges[2][:-1, :-1, 1:])
-        measure_cds = cds / np.einsum('a,b,c->abc', *[np.asarray(prob.axes[l].widths) for l in labels[1:]])
-        weight = (energy * widths[0][:, None, None, None] * widths[1][None, :, None, None]
-                  * widths[2][None, None, :, None] * widths[3][None, None, None, :]
-                  * measure_cds[np.ix_(*bins[1:])][None])
 
         return density, mids[0], weight
 
@@ -626,7 +641,8 @@ class TestEventProbability:
     def test_interpolated_probability_integrates_to_one(self, eps_edges):
         """The probability as evaluated (multilinear interpolation, flat up to the
         axis edges) integrates to 1 over Em, Phi, Theta and Zeta for a photon at any
-        Ei and direction: at Ei and NuLambda centers, and in between them."""
+        Ei and direction: at Ei and NuLambda centers, and in between them. The
+        measure is the true one, sin(phi + theta) dphi dtheta dzeta."""
 
         irf = _make_physical_irf_hist(eps_edges=eps_edges)
         model = IRFRelativeHistUnpolarized(irf)
@@ -638,14 +654,47 @@ class TestEventProbability:
             density, _, weight = self._density_on_sub_cells(model, lon, lat, energy)
             pix, _ = model.axes['NuLambda'].interp_weights(_direction(lon, lat))
             assert (irf.contents[np.asarray(pix).ravel()].sum(axis=(2, 3, 4, 5)) > 0).all()
-            assert np.sum(density * weight) == pytest.approx(1., rel=1e-9)
+            assert np.sum(density * weight) == pytest.approx(1., rel=3e-3)
+
+    def test_event_probability_integrates_to_one_over_the_data_space(self):
+        """End to end: events are built from a grid of sub-cells in the relative
+        coordinates (the scattered direction from ``to_cds``), evaluated with
+        ``_interp_event_prob``, and summed with the exact volume of each sub-cell
+        in the data space. It covers the physical region, Phi + Theta in [0, pi]."""
+
+        model = IRFRelativeHistUnpolarized(_make_physical_irf_hist())
+        pixel_center = model.axes['NuLambda'].pix2ang(5, lonlat=True)
+        photons_at = [(np.deg2rad(pixel_center[0]), np.deg2rad(pixel_center[1]), model.axes['Ei'].centers[1]),
+                      TestNearestInterpolation.photons_at[1]]
+
+        for lon, lat, energy in photons_at:
+            mids, weight = self._sub_cells(model, energy, nsub=8)
+            eps, phi_kin, theta, zeta = np.meshgrid(*mids, indexing='ij')
+            phi_geo = phi_kin + theta
+            physical = (weight > 0) & (phi_geo > 0) & (phi_geo < np.pi)
+
+            n = physical.sum()
+            relcoords = RelativeCDSCoordinates(_direction(np.full(1, lon), np.full(1, lat)).to_cartesian().xyz,
+                                               model._pol_convention)
+            psichi = RelativeCDSCoordinates.to_cds(relcoords, phi_geo[physical], zeta[physical])
+            psichi = UnitSphericalRepresentation.from_cartesian(
+                CartesianRepresentation(*psichi, unit=u.one))
+
+            photons = _FakePhotonList(np.full(n, lon), np.full(n, lat), np.full(n, energy))
+            events = _FakeEventData(psichi.lon.to_value(u.rad), psichi.lat.to_value(u.rad), phi_kin[physical],
+                                    energy * (1 + eps[physical]))
+
+            prob = model._interp_event_prob(photons, events)
+
+            assert np.sum(prob * weight[physical]) == pytest.approx(1., rel=2e-3)
 
     @pytest.mark.parametrize('ranges', [[[150., 400.]], [[160., 190.], [250., 330.]], [[300., 340.]]])
     @pytest.mark.parametrize('use_aeff', [False, True])
     def test_selected_area_is_exact_integral_of_differential_area(self, ranges, use_aeff):
         """For photons off the Ei and NuLambda centers, the selected area is the
         unselected area times the exact integral of the probability over the
-        selected Em, splitting the Epsilon integration at the cut boundaries."""
+        selected Em, splitting the Epsilon integration at the cut boundaries, with the
+        true measure."""
 
         selections = tuple(EnergySelector(u.Quantity(r, u.keV)) for r in ranges)
         kwargs = {'aeff': _make_aeff_hist()} if use_aeff else {}
@@ -664,7 +713,7 @@ class TestEventProbability:
 
             assert unselected > 0
             assert 0 < per_eps[inside].sum() < 1
-            assert model._effective_area_cm2(photons)[0] == pytest.approx(unselected * per_eps[inside].sum(), rel=1e-9)
+            assert model._effective_area_cm2(photons)[0] == pytest.approx(unselected * per_eps[inside].sum(), rel=3e-3)
 
     @pytest.mark.parametrize('eps_edges', [np.linspace(-0.5, 0.5, 5), np.array([-0.5, -0.3, -0.02, 0.02, 0.1, 0.5])])
     def test_full_range_selection_fraction_is_one(self, eps_edges):
