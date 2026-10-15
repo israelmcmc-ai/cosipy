@@ -4,6 +4,8 @@ import numpy as np
 import pytest
 
 import astropy.units as u
+from astropy.coordinates import UnitSphericalRepresentation
+from astropy.units import Quantity
 from histpy import Axis, Axes, HealpixAxis, Histogram
 from scoords import SpacecraftFrame
 
@@ -930,3 +932,161 @@ class TestSelectionFractionBounded:
 
     def test_fraction_increases_with_the_cut(self):
         assert self._fraction(95., 105.) < self._fraction(90., 110.) < self._fraction(50., 120.) <= 1
+
+
+def _direction(lon_rad, lat_rad):
+    return UnitSphericalRepresentation(lon=Quantity(np.atleast_1d(lon_rad), 'rad'),
+                                       lat=Quantity(np.atleast_1d(lat_rad), 'rad'))
+
+
+def _nearest_bin_values(model, lon_rad, lat_rad, energy_keV):
+    """Value of the (nearest-mode) event probability at the center of every
+    (Epsilon, Phi, Theta, Zeta) bin, for one photon, and the bin volumes in
+    the data space at that photon's own energy."""
+
+    axes = model.axes
+    eps, phi, theta, zeta = np.meshgrid(*[np.asarray(axes[l].centers) for l in ['Epsilon', 'Phi', 'Theta', 'Zeta']],
+                                        indexing='ij')
+    n = eps.size
+    values = model._nearest_lookup(_direction(np.full(n, lon_rad), np.full(n, lat_rad)), np.full(n, energy_keV),
+                                   eps.ravel(), phi.ravel(), theta.ravel(), zeta.ravel()).reshape(eps.shape)
+
+    edges = np.meshgrid(axes['Phi'].edges, axes['Theta'].edges, axes['Zeta'].edges, indexing='ij')
+    cds = RelativeCDSCoordinates.get_relative_cds_phase_space(
+        edges[0][:-1, :-1, :-1], edges[0][1:, :-1, :-1], edges[1][:-1, :-1, :-1], edges[1][:-1, 1:, :-1],
+        edges[2][:-1, :-1, :-1], edges[2][:-1, :-1, 1:])
+    volume = energy_keV * np.asarray(axes['Epsilon'].widths)[:, None, None, None] * cds[None]
+
+    return values, volume
+
+
+class TestNearestInterpolation:
+
+    photons_at = [(0.3, 0.2, 316.227766),  # Ei bin center, direction not at a pixel center
+                  (-2.0, -0.7, 210.),  # Ei between centers
+                  (2.5, 1.1, 640.)]
+
+    def test_invalid_interpolation_raises(self):
+        with pytest.raises(ValueError):
+            IRFRelativeHistUnpolarized(_make_irf_hist(), interpolation='cubic')
+
+    def test_default_is_linear(self):
+        assert IRFRelativeHistUnpolarized(_make_irf_hist())._interpolation == 'linear'
+
+    def test_linear_unchanged_by_nearest_option(self):
+        photons, events = _make_photons_and_events(200)
+        default = IRFRelativeHistUnpolarized(_make_irf_hist())
+        linear = IRFRelativeHistUnpolarized(_make_irf_hist(), interpolation='linear')
+
+        np.testing.assert_array_equal(default._event_probability(photons, events),
+                                      linear._event_probability(photons, events))
+
+    def test_probability_integrates_to_one(self):
+        """The density is piecewise constant, so summing value x volume over
+        the bins is the exact integral, for photons at any Ei and direction."""
+
+        irf = _make_physical_irf_hist()
+        model = IRFRelativeHistUnpolarized(irf, interpolation='nearest')
+
+        for lon, lat, energy in self.photons_at:
+            values, volume = _nearest_bin_values(model, lon, lat, energy)
+            pix = model.axes['NuLambda'].find_bin(_direction(lon, lat))[0]
+            iei = np.searchsorted(model.axes['Ei'].edges, energy, side='right') - 1
+            assert irf.contents[pix, iei].sum() > 0
+            assert np.sum(values * volume) == pytest.approx(1., rel=1e-12)
+
+    def test_zero_probability_bins_have_zero_integral(self):
+        """_make_physical_irf_hist has no content in NuLambda pixel 0, Ei bin 1."""
+
+        model = IRFRelativeHistUnpolarized(_make_physical_irf_hist(), interpolation='nearest')
+        lon, lat = model.axes['NuLambda'].pix2ang(0, lonlat=True)
+        values, volume = _nearest_bin_values(model, np.deg2rad(lon), np.deg2rad(lat), 300.)
+
+        assert np.all(values == 0)
+
+    def test_value_is_that_of_the_bin_each_event_lands_in(self):
+        model = IRFRelativeHistUnpolarized(_make_irf_hist(), interpolation='nearest')
+        axes = model.axes
+        lon, lat, energy = 0.3, 0.2, 210.
+        pix = axes['NuLambda'].find_bin(_direction(lon, lat))[0]
+        iei = np.searchsorted(axes['Ei'].edges, energy, side='right') - 1
+        edges = [np.asarray(axes[l].edges) for l in ['Epsilon', 'Phi', 'Theta', 'Zeta']]
+        centers = [np.asarray(axes[l].centers) for l in ['Epsilon', 'Phi', 'Theta', 'Zeta']]
+        sizes = [len(c) for c in centers]
+
+        for index in [(0, 0, 0, 0), (1, 2, 3, 4), tuple(s - 1 for s in sizes)]:
+            args = [c[i] for c, i in zip(centers, index)]
+            # Move within the bin, without crossing its edges
+            shifted = [c[i] + 0.4 * (e[i + 1] - e[i]) for c, e, i in zip(centers, edges, index)]
+            for point in (args, shifted):
+                value = model._nearest_lookup(_direction(lon, lat), np.array([energy]), *[np.array([p]) for p in point])
+                expected = (model._event_prob.contents[(pix, iei) + index]
+                            * axes['Ei'].centers[iei] / energy)
+                np.testing.assert_allclose(value, expected)
+
+    def test_zero_outside_axes_ranges(self):
+        model = IRFRelativeHistUnpolarized(_make_irf_hist(), interpolation='nearest')
+
+        for energy, eps in [(99., 0.1), (1001., 0.1), (300., -0.51), (300., 0.51)]:
+            photons, events = _one_photon_events(energy, [eps], n=1)
+            assert model._event_probability(photons, events)[0] == 0
+
+        photons, events = _one_photon_events(300., [0.1], n=1)
+        assert model._event_probability(photons, events)[0] >= 0
+
+    @pytest.mark.parametrize('use_aeff', [False, True])
+    @pytest.mark.parametrize('ranges', [[[150., 400.]], [[160., 190.], [250., 330.]], [[0., 1e5]]])
+    def test_selected_area_is_exact_integral_of_differential_area(self, ranges, use_aeff):
+        selections = tuple(EnergySelector(u.Quantity(r, u.keV)) for r in ranges)
+        kwargs = {'aeff': _make_aeff_hist()} if use_aeff else {}
+        model = IRFRelativeHistUnpolarized(_make_physical_irf_hist(), selections=selections,
+                                           interpolation='nearest', **kwargs)
+        eps_edges = np.asarray(model.axes['Epsilon'].edges)
+
+        for lon, lat, energy in self.photons_at:
+            photons = _FakePhotonList(np.array([lon]), np.array([lat]), np.array([energy]))
+            unselected = model._effective_area_cm2_unselected(photons)[0]
+            values, volume = _nearest_bin_values(model, lon, lat, energy)
+            per_eps = (values * volume).sum(axis=(1, 2, 3))
+
+            # Integral of the differential effective area over Em in the ranges (lower
+            # Em limit of Epsilon bin b to its upper, clipped to each range)
+            em_edges = energy * (1 + eps_edges)
+            selected = 0.
+            for lo, hi in ranges:
+                fraction = np.clip(np.minimum(hi, em_edges[1:]) - np.maximum(lo, em_edges[:-1]), 0, None) \
+                           / np.diff(em_edges)
+                selected += np.sum(per_eps * fraction)
+
+            assert unselected > 0
+            assert model._effective_area_cm2(photons)[0] == pytest.approx(unselected * selected, rel=1e-12)
+
+    def test_conditional_probability_integrates_to_one_over_selected_range(self):
+        """Dividing by the selected fraction makes the probability integrate to
+        1 over the events inside the selection."""
+
+        selections = (EnergySelector(u.Quantity([160., 190.], u.keV)), EnergySelector(u.Quantity([250., 330.], u.keV)))
+        model = IRFRelativeHistUnpolarized(_make_physical_irf_hist(), selections=selections, interpolation='nearest')
+        eps_edges = np.asarray(model.axes['Epsilon'].edges)
+
+        lon, lat, energy = -2.0, -0.7, 210.
+        photons = _FakePhotonList(np.array([lon]), np.array([lat]), np.array([energy]))
+        values, volume = _nearest_bin_values(model, lon, lat, energy)
+        per_eps = (values * volume).sum(axis=(1, 2, 3))
+        em_edges = energy * (1 + eps_edges)
+        inside = sum(np.clip(np.minimum(hi, em_edges[1:]) - np.maximum(lo, em_edges[:-1]), 0, None)
+                     / np.diff(em_edges) for lo, hi in [(160., 190.), (250., 330.)])
+        fraction = model._effective_area_cm2(photons)[0] / model._effective_area_cm2_unselected(photons)[0]
+
+        assert 0 < fraction < 1
+        assert np.sum(per_eps * inside) / fraction == pytest.approx(1., rel=1e-12)
+
+    def test_from_h5_passes_interpolation(self, tmp_path):
+        path = tmp_path / "irf.h5"
+        _make_irf_hist().write(str(path), name="IRF", overwrite=True)
+
+        assert IRFRelativeHistUnpolarized.from_h5(path, interpolation='nearest')._interpolation == 'nearest'
+        assert IRFRelativeHistUnpolarized.from_h5(path)._interpolation == 'linear'
+
+        with pytest.raises(ValueError):
+            IRFRelativeHistUnpolarized.from_h5(path, interpolation='cubic')

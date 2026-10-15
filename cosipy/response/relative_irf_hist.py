@@ -56,7 +56,7 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
     On construction the input histogram is validated, its axis units
     are standardized (energies to keV, angles to radians, contents to
     cm^2), and it is divided by the phase-space volume of each bin and
-    normalized, per ``(NuLambda, Ei)``, so that its interpolant
+    normalized, per ``(NuLambda, Ei)``, so that it
     integrates to one over ``Epsilon``, ``Phi``, ``Theta`` and
     ``Zeta``. The result is stored as ``_event_prob``, the probability
     density of an event (``Em``, ``Phi``, ``PsiChi``) given the photon
@@ -70,6 +70,15 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
     the ``Zeta`` axis is preserved as :attr:`_pol_convention` so it
     can be re-applied when translating event directions into the
     relative coordinate system.
+
+    Two evaluation modes are available (``interpolation``). In the
+    ``'linear'`` mode the density is multilinearly interpolated between
+    bin centers. Its normalization is exact only at ``Ei`` bin centers
+    (and for photons at ``NuLambda`` pixel centers), and assumes the phase
+    space is uniform within each bin. In the ``'nearest'`` mode the density
+    is piecewise constant, the event probability is exactly normalized
+    for any photon, and the selected effective area is exactly consistent
+    with it.
 
     This class is labelled "Unpolarized" because it does not model a
     dependence of the response on the incident photon polarization
@@ -159,6 +168,22 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
         Within a single ``Ei`` value, the fraction is computed by
         linearly interpolating between ``Epsilon`` bin centers.
         Defaults to ``None`` (no cut).
+    interpolation : {'linear', 'nearest'}, optional
+        How the event probability is evaluated between bin centers.
+        ``'linear'`` (default) is described above. ``'nearest'`` uses the
+        value of the bin each (photon, event) pair lands in, on all six
+        axes, and zero outside the axes' ranges. In this mode the event
+        probability integrates to one over the data space for any photon
+        (at any ``Ei`` and direction, not only at bin centers), and the
+        selected effective area is exactly the integral of the
+        differential effective area over the selected ``Em`` range: it is
+        the unselected area times the fraction of the photon's own
+        ``(NuLambda, Ei)`` bin content that falls in the selection
+        (``Epsilon`` bins partially inside a range count by their
+        overlap), instead of the interpolated ``_tot_aeff``. Because the
+        response is a step function of ``Ei``, an integrator over ``Ei``
+        must resolve the step at every ``Ei`` bin edge (e.g. trapezoidal
+        folding with nodes at the ``Ei`` and ``Epsilon`` bin edges).
     """
 
     event_data_type = EmCDSEventDataInSCFrameInterface
@@ -170,7 +195,8 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
                  copy = True,
                  nthreads = 1,
                  npoints_parallel_thresh = 1000,
-                 selections: Union[EventSelectorInterface, Tuple[EventSelectorInterface, ...]] = None):
+                 selections: Union[EventSelectorInterface, Tuple[EventSelectorInterface, ...]] = None,
+                 interpolation: str = 'linear'):
         """
         Validate the input histogram(s), standardize their axis units,
         and pre-compute the total and differential effective area used
@@ -202,14 +228,22 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
         selections : cosipy.event_selection.EnergySelector or tuple thereof, optional
             Measured-energy cut(s) applied to ``_tot_aeff``. See the
             class docstring.
+        interpolation : {'linear', 'nearest'}, optional
+            Evaluation mode. See the class docstring.
 
         Raises
         ------
         ValueError
             If the histogram contents are not area-equivalent, the
             axis labels do not match the expected sequence, or an
-            axis has an unexpected type or units.
+            axis has an unexpected type or units, or ``interpolation``
+            is not ``'linear'`` or ``'nearest'``.
         """
+
+        if interpolation not in ('linear', 'nearest'):
+            raise ValueError(f"interpolation must be 'linear' or 'nearest', got {interpolation!r}")
+
+        self._interpolation = interpolation
 
         if copy:
             irf = irf.copy()
@@ -319,12 +353,21 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
         # non-uniform bins that interpolant doesn't integrate to the bin contents (e.g. it
         # over-integrates the tails of a peaked Theta distribution), so normalize by its
         # actual integral instead.
-        integral = self._interpolant_integral(irf, phase_space_em, phase_space_cds)
+        if interpolation == 'nearest':
+            # Content per (NuLambda, Ei, Epsilon) bin, excluding the bins zeroed above. The
+            # density is piecewise constant, so this is its exact integral.
+            self._nearest_proj = np.array([np.einsum('eabcd,bcd->ea', d, phase_space_cds)
+                                           for d in irf.contents]) * phase_space_em[None]
+            integral = self._nearest_proj.sum(axis=2)
+        else:
+            integral = self._interpolant_integral(irf, phase_space_em, phase_space_cds)
         inv_integral = np.divide(1., integral, out=np.zeros_like(integral), where=integral > 0)
         np.multiply(irf.contents, inv_integral[:, :, None, None, None, None], out=irf.contents)
 
         self._event_prob = irf
         self._has_selection = combined_selector is not None
+        self._selection_ranges = (None if combined_selector is None
+                                  else np.asarray(combined_selector.energy_ranges_keV, dtype=float))
 
         # Extra params
         self._nthreads = nthreads
@@ -1000,6 +1043,9 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
             One effective-area value per photon, in cm^2.
         """
 
+        if self._interpolation == 'nearest' and self._has_selection:
+            return self._effective_area_cm2_unselected(photons) * self._nearest_selected_fraction(photons)
+
         return self._interp_aeff(self._tot_aeff, photons)
 
     def _effective_area_cm2_unselected(self, photons: PhotonListWithDirectionAndEnergyInSCFrameInterface) -> Iterable[float]:
@@ -1139,6 +1185,9 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
         # over the whole input and cheap relative to the interpolation
         # below, so only the interp() call itself is (optionally)
         # parallelized -- see _parallel_interp.
+        if self._interpolation == 'nearest':
+            return self._nearest_lookup(photon_dir, photon_energy_keV, epsilon, phi_kin_rad, theta_rad, zeta_rad)
+
         def build_args(lon_rad, lat_rad, energy_keV, eps, phi, theta, zeta_r):
             photon_dir_chunk = UnitSphericalRepresentation(lon=Quantity(lon_rad, 'rad', copy=False),
                                                             lat=Quantity(lat_rad, 'rad', copy=False))
@@ -1155,6 +1204,80 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
                     & self._in_ei_range(self._event_prob, photon_energy_keV))
 
         return np.where(in_range, prob, 0.0)
+
+    @staticmethod
+    def _nearest_bin(axis, values):
+        """
+        Index of the bin of ``axis`` that contains each of ``values`` (clipped to the
+        first/last bin), and whether each value is within the axis' range.
+        """
+
+        edges = np.asarray(axis.edges, dtype=float)
+        values = np.asarray(values, dtype=float)
+        index = np.clip(np.searchsorted(edges, values, side='right') - 1, 0, len(edges) - 2)
+
+        return index, (values >= edges[0]) & (values <= edges[-1])
+
+    def _nearest_photon_bins(self, photon_dir, energy_keV):
+        """
+        ``NuLambda`` pixel and ``Ei`` bin of each photon, and whether its energy is within
+        the range of the ``Ei`` axis.
+        """
+
+        axes = self._event_prob.axes
+        pix = np.asarray(axes['NuLambda'].find_bin(photon_dir))
+        iei, ok = self._nearest_bin(axes['Ei'], energy_keV)
+
+        return pix, iei, ok
+
+    def _nearest_lookup(self, photon_dir, energy_keV, epsilon, phi, theta, zeta):
+        """
+        Value of ``_event_prob`` in the bin that each (photon, event) pair lands in, zero
+        outside the axes' ranges.
+
+        Each ``Epsilon`` bin spans ``Ei * dEpsilon`` in ``Em``, so the value is
+        rescaled by ``Ei_center / Ei`` to stay normalized at any ``Ei`` within the bin.
+        """
+
+        axes = self._event_prob.axes
+        pix, iei, ok = self._nearest_photon_bins(photon_dir, energy_keV)
+        index = [pix, iei]
+
+        for label, values in zip(['Epsilon', 'Phi', 'Theta', 'Zeta'], [epsilon, phi, theta, zeta]):
+            i, in_range = self._nearest_bin(axes[label], values)
+            index.append(i)
+            ok &= in_range
+
+        prob = self._event_prob.contents[tuple(index)] * np.asarray(axes['Ei'].centers)[iei] / energy_keV
+
+        return np.where(ok, prob, 0.0)
+
+    def _nearest_selected_fraction(self, photons):
+        """
+        Fraction of each photon's effective area with ``Em`` inside the selections, from
+        the content of its own ``(NuLambda, Ei)`` bin. ``Epsilon`` bins that are partially
+        inside a range count by their overlap. Zero for photons outside the ``Ei`` axis.
+        """
+
+        photon_lon_rad, photon_lat_rad, energy_keV = self._photon_list_to_raw_values(photons)
+        photon_dir = UnitSphericalRepresentation(lon=Quantity(photon_lon_rad, 'rad', copy=False),
+                                                 lat=Quantity(photon_lat_rad, 'rad', copy=False))
+        pix, iei, ok = self._nearest_photon_bins(photon_dir, energy_keV)
+
+        eps_edges = np.asarray(self._event_prob.axes['Epsilon'].edges, dtype=float)
+        energy_keV = np.asarray(energy_keV, dtype=float)
+
+        weights = np.zeros((len(energy_keV), len(eps_edges) - 1))
+        for lo, hi in self._selection_ranges:
+            overlap = (np.minimum(hi / energy_keV[:, None] - 1, eps_edges[None, 1:])
+                       - np.maximum(lo / energy_keV[:, None] - 1, eps_edges[None, :-1]))
+            weights += np.clip(overlap, 0, None) / np.diff(eps_edges)[None, :]
+
+        proj = self._nearest_proj[pix, iei]
+        total = proj.sum(axis=1)
+        fraction = np.divide((proj * weights).sum(axis=1), total, out=np.zeros_like(total), where=total > 0)
+
+        return np.where(ok, fraction, 0.0)
 
     def _differential_effective_area_cm2(self, photons:PhotonListWithDirectionAndEnergyInSCFrameInterface, events: EmCDSEventDataInSCFrameInterface) -> Iterable[float]:
         """

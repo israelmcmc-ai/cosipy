@@ -162,6 +162,16 @@ if it's blocked, say so and validate with synthetic histograms.
   `docs/tutorials/spectral_fits/continuum_fit/grb/example_grb_fit_relative_hist_response.ipynb`
   (`irf_mode` = `hist_simple` / `hist_nn` / `nn`).
 
+- `interpolation='linear'` (default) interpolates the density between bin
+  centers; its normalization is exact only at `Ei` centers and uniform phase
+  space within bins. `interpolation='nearest'` uses the value of the bin each
+  (photon, event) lands in (times `Ei_center/Ei`): the event probability
+  integrates to exactly 1 for any photon, and the selected area is the
+  unselected area times a fraction computed from the photon's own
+  `(NuLambda, Ei)` bin content (`_nearest_proj`), so it is exactly the
+  integral of the differential area over the selected `Em` range. Its step
+  at every `Ei` edge must be resolved by the integrator over `Ei`.
+
 ### Energy selections (`selections=EnergySelector(...)`)
 
 - A tuple of selectors is OR'd via `EnergySelector.union`. `EnergySelector`
