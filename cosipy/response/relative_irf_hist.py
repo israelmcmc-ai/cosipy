@@ -61,7 +61,9 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
     ``Zeta``. The result is stored as ``_event_prob``, the probability
     density of an event (``Em``, ``Phi``, ``PsiChi``) given the photon
     (``NuLambda``, ``Ei``), with implicit units of
-    ``1 / sr / rad / keV``. The total effective area of the photon
+    ``1 / sr / rad / keV`` (in the ``'linear'`` mode the stored table is per unit
+    ``Epsilon`` instead of per keV, ``1 / sr / rad``, and is divided by the
+    photon energy when evaluated; see below). The total effective area of the photon
     (``aeff``, or the ``NuLambda``/``Ei`` projection of ``irf``) is
     stored separately, so that the differential effective area is that
     area times the event probability. Photons outside the range of the
@@ -73,9 +75,13 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
 
     Two evaluation modes are available (``interpolation``). In the
     ``'linear'`` mode the density is multilinearly interpolated between
-    bin centers. Its normalization is exact only at ``Ei`` bin centers
-    (and for photons at ``NuLambda`` pixel centers), and assumes the phase
-    space is uniform within each bin. In the ``'nearest'`` mode the density
+    bin centers. The stored table is the density per unit ``Epsilon``
+    (the normalized density times ``Ei`` at the bin center) and is divided by the photon's
+    ``Ei`` when evaluated, since ``dEm = Ei * dEpsilon``. Every ``Ei``
+    slice is then normalized over ``Epsilon``, and so is any interpolation between
+    them: the event probability integrates to one for photons at any ``Ei`` and
+    ``NuLambda``, assuming only that the phase space is uniform within each
+    bin. In the ``'nearest'`` mode the density
     is piecewise constant, the event probability is exactly normalized
     for any photon, and the selected effective area is exactly consistent
     with it.
@@ -128,13 +134,19 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
         more than it saves. Defaults to ``1000``; only matters when
         ``nthreads`` > 1.
     selections : cosipy.event_selection.EnergySelector or tuple thereof, optional
-        Measured-energy cut(s) to bake into the total effective area
-        (:attr:`_tot_aeff`), so it matches an equivalent cut already
-        applied to the event data being fit (e.g. via the same
-        ``EnergySelector``). The total effective area before the cut is
-        kept in ``_aeff_unselected``, and the event probability is divided by the
-        selected fraction (``_tot_aeff / _aeff_unselected``) to make it conditional on passing the cut.
-        The differential effective area is not scaled by it. Only ``EnergySelector`` is currently
+        Measured-energy cut(s), so the effective area matches an equivalent
+        cut already applied to the event data being fit (e.g. via the same
+        ``EnergySelector``). The selected effective area of a photon is its
+        unselected area times the fraction of its event probability whose
+        ``Em`` is inside the selection. The fraction is computed per photon
+        from the same interpolation of the event probability (same ``NuLambda``
+        and ``Ei`` weights, and the same ``Epsilon`` interpolant) that
+        is used to evaluate the density, so the two are exactly consistent: the
+        selected area is the integral of the differential effective area over
+        the selected ``Em`` range, and no refinement of the ``Ei`` grid is
+        needed for narrow cuts. The event probability is divided by the
+        fraction to make it conditional on passing the cut. The differential
+        effective area is not scaled by it. Only ``EnergySelector`` is currently
         supported; anything else raises ``TypeError``. If a tuple is
         given, the cuts combine with OR semantics (unioned via
         ``EnergySelector.union``) -- i.e. each entry is treated as an
@@ -142,31 +154,6 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
         in any of them. For AND semantics, pass a single
         pre-intersected ``EnergySelector`` (e.g.
         ``sel1.intersect(sel2)``) instead of a tuple.
-
-        For each ``(NuLambda, Ei)`` bin, ``_tot_aeff`` is scaled by the
-        fraction of that bin's effective area whose measured energy
-        ``Em = Ei*(1 + Epsilon)`` falls inside the selection. If
-        ``tot_aeff`` is on a different (typically finer) ``NuLambda``/
-        ``Ei`` grid than ``irf`` (the ``aeff`` constructor parameter),
-        ``irf``'s own ``(NuLambda, Ei, Epsilon)`` response is first
-        interpolated (in ``NuLambda``/``Ei`` only, one ``Epsilon`` bin
-        at a time) onto ``tot_aeff``'s grid, and the selection fraction
-        is then evaluated at each of ``tot_aeff``'s own exact ``Ei``
-        values -- rather than evaluating the fraction on ``irf``'s own
-        (coarser) ``Ei`` grid and interpolating *that* onto ``tot_aeff``.
-
-        To account for a narrow energy cut, the ``_tot_aeff``'s ``Ei`` grid is
-        also refined automatically near the cut: the fraction varies
-        with ``Ei`` on a scale of ~``Ei * dEpsilon``, often much finer
-        than ``aeff``'s own ``Ei`` bins, and ``_tot_aeff`` is linearly
-        interpolated in ``Ei`` at evaluation time. Extra ``Ei`` edges are
-        added wherever a cut boundary ``E_cut`` maps onto an ``Epsilon``
-        edge or center (``Ei = E_cut / (1 + Epsilon)``); every original
-        ``aeff`` edge is kept. Without a separate ``aeff``, ``_tot_aeff``
-        stays on ``irf``'s own ``Ei`` grid.
-
-        Within a single ``Ei`` value, the fraction is computed by
-        linearly interpolating between ``Epsilon`` bin centers.
         Defaults to ``None`` (no cut).
     interpolation : {'linear', 'nearest'}, optional
         How the event probability is evaluated between bin centers.
@@ -180,7 +167,7 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
         the unselected area times the fraction of the photon's own
         ``(NuLambda, Ei)`` bin content that falls in the selection
         (``Epsilon`` bins partially inside a range count by their
-        overlap), instead of the interpolated ``_tot_aeff``. Because the
+        overlap). Because the
         response is a step function of ``Ei``, an integrator over ``Ei``
         must resolve the step at every ``Ei`` bin edge (e.g. trapezoidal
         folding with nodes at the ``Ei`` and ``Epsilon`` bin edges).
@@ -199,8 +186,8 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
                  interpolation: str = 'linear'):
         """
         Validate the input histogram(s), standardize their axis units,
-        and pre-compute the total and differential effective area used
-        at evaluation time.
+        and pre-compute the total effective area and the normalized event
+        probability used at evaluation time.
 
         See the class docstring for a description of the expected axes
         and units.
@@ -226,8 +213,7 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
             Minimum points per thread before parallelizing. See the
             class docstring.
         selections : cosipy.event_selection.EnergySelector or tuple thereof, optional
-            Measured-energy cut(s) applied to ``_tot_aeff``. See the
-            class docstring.
+            Measured-energy cut(s). See the class docstring.
         interpolation : {'linear', 'nearest'}, optional
             Evaluation mode. See the class docstring.
 
@@ -303,19 +289,12 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
         else:
             self._tot_aeff = irf.project('NuLambda','Ei') # cm^2
 
-        # Total effective area before any energy selection
-        self._aeff_unselected = self._tot_aeff
-
         combined_selector = self._combine_selections(selections)
-
-        if combined_selector is not None:
-            self._tot_aeff = self._apply_energy_selection(irf, self._tot_aeff, combined_selector,
-                                                            same_grid = aeff is None)
 
         # The divisions below are in place, since the contents are large
 
         # Phase space
-        # Final content units will be 1/sr/rad/keV
+        # Content units will be 1/sr/rad/keV, and 1/sr/rad (per unit Epsilon) for the linear mode, see below
         phi_edges_mesh, arm_edges_mesh, az_edges_mesh = np.meshgrid(axes['Phi'].edges,
                                                                     axes['Theta'].edges,
                                                                     axes['Zeta'].edges, indexing='ij')
@@ -360,9 +339,20 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
                                            for d in irf.contents]) * phase_space_em[None]
             integral = self._nearest_proj.sum(axis=2)
         else:
-            integral = self._interpolant_integral(irf, phase_space_em, phase_space_cds)
+            ei_centers = np.asarray(axes['Ei'].centers, dtype=float)
+            cds_marginal = self._cds_marginal(irf, phase_space_cds)
+            hat_totals = self._hat_integrals(axes['Epsilon']).sum(axis=0)
+            integral = ei_centers[None, :] * (cds_marginal @ hat_totals)
         inv_integral = np.divide(1., integral, out=np.zeros_like(integral), where=integral > 0)
         np.multiply(irf.contents, inv_integral[:, :, None, None, None, None], out=irf.contents)
+
+        if interpolation == 'linear':
+            # Density per unit Epsilon: the interpolation between Ei centers happens at fixed
+            # Epsilon, where the Em measure is Ei * dEpsilon, so each Ei slice must integrate to
+            # one over Epsilon for the interpolation to remain normalized.
+            np.multiply(irf.contents, ei_centers[None, :, None, None, None, None], out=irf.contents)
+            self._epsilon_marginal = cds_marginal * (ei_centers[None, :] * inv_integral)[:, :, None]
+            self._hat_cum_at_centers = self._hat_cumulative_at_centers(axes['Epsilon'])
 
         self._event_prob = irf
         self._has_selection = combined_selector is not None
@@ -384,59 +374,144 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
         return self._event_prob.axes
 
     @staticmethod
-    def _interpolant_integral(density: Histogram, phase_space_em: np.ndarray,
-                              phase_space_cds: np.ndarray) -> np.ndarray:
+    def _hat_integrals(axis: Axis) -> np.ndarray:
         """
-        Integral, over the data space within the axes' ranges, of the
-        ``density`` as evaluated by ``interp()`` (multilinear between bin
-        centers, flat beyond the first/last center), per (``NuLambda``,
-        ``Ei``).
+        Integral over each bin of ``axis`` of the hat function of each center, i.e. the function that
+        ``interp()`` weights each center's value with: 1 at the center, 0 at the
+        neighboring centers, linear in between and flat (1) beyond the
+        first/last center.
 
-        The interpolant is a sum of products of 1D "hat" functions, so its
-        integral over a bin factorizes: along each axis, ``M[b, i]`` is the
-        integral over bin ``b`` of the hat function of center ``i``. The
+        Returns
+        -------
+        numpy.ndarray, shape (nbins, ncenters)
+        """
+
+        centers = np.asarray(axis.centers)
+        edges = np.asarray(axis.edges)
+        unit = np.eye(len(centers))
+
+        return np.array([[IRFRelativeHistUnpolarized._integrate_piecewise_linear(unit[i], centers, lo, hi)
+                          for i in range(len(centers))]
+                         for lo, hi in zip(edges[:-1], edges[1:])])
+
+    @staticmethod
+    def _cds_marginal(density: Histogram, phase_space_cds: np.ndarray) -> np.ndarray:
+        """
+        Integral over ``Phi``, ``Theta`` and ``Zeta`` of the ``density`` as
+        evaluated by ``interp()`` (multilinear between bin centers, flat
+        beyond the first/last center), weighted by the phase space, per
+        (``NuLambda``, ``Ei``) and ``Epsilon`` center. It is linear in the
+        ``Epsilon`` hat function of each center, so the integral over any
+        ``Epsilon`` range is the sum of this times the integral of each hat.
+
+        The interpolant is a sum of products of 1D hat functions, so its
+        integral over a bin factorizes: along each axis, ``m[b, j]`` is the
+        integral over bin ``b`` of the hat function of center ``j``. The
         phase-space measure is taken as uniform within each bin.
 
         Parameters
         ----------
         density : histpy.Histogram
             Density with axes ``NuLambda, Ei, Epsilon, Phi, Theta, Zeta``.
-        phase_space_em : numpy.ndarray, shape (nEi, nEpsilon)
-            Phase space of each (``Ei``, ``Epsilon``) bin (``Ei_center * dEps``).
         phase_space_cds : numpy.ndarray, shape (nPhi, nTheta, nZeta)
             Phase space of each CDS bin.
 
         Returns
         -------
-        numpy.ndarray, shape (nNuLambda, nEi)
+        numpy.ndarray, shape (nNuLambda, nEi, nEpsilon)
         """
 
         axes = density.axes
-        cds_labels = ['Epsilon', 'Phi', 'Theta', 'Zeta']
-
-        def hat_integrals(axis):
-            centers, edges = np.asarray(axis.centers), np.asarray(axis.edges)
-            unit = np.eye(len(centers))
-            return np.array([[IRFRelativeHistUnpolarized._integrate_piecewise_linear(unit[i], centers, lo, hi)
-                              for i in range(len(centers))]
-                             for lo, hi in zip(edges[:-1], edges[1:])])
-
-        m_eps, m_phi, m_theta, m_zeta = (hat_integrals(axes[label]) for label in cds_labels)
-        widths = [np.asarray(axes[label].widths) for label in cds_labels]
+        m_phi, m_theta, m_zeta = (IRFRelativeHistUnpolarized._hat_integrals(axes[label])
+                                  for label in ['Phi', 'Theta', 'Zeta'])
+        widths = [np.asarray(axes[label].widths) for label in ['Phi', 'Theta', 'Zeta']]
 
         # Phase space per unit coordinate volume of each bin
-        measure_em = phase_space_em / widths[0][None, :]
-        measure_cds = phase_space_cds / (widths[1][:, None, None] * widths[2][None, :, None] * widths[3][None, None, :])
+        measure_cds = phase_space_cds / (widths[0][:, None, None] * widths[1][None, :, None] * widths[2][None, None, :])
+        weights = np.einsum('bj,ck,dl,bcd->jkl', m_phi, m_theta, m_zeta, measure_cds)
 
-        integral = np.empty(density.contents.shape[:2])
-        for pix, d in enumerate(density.contents):
-            d = np.einsum('ai,eijkl->eajkl', m_eps, d)
-            d = np.einsum('bj,eajkl->eabkl', m_phi, d)
-            d = np.einsum('ck,eabkl->eabcl', m_theta, d)
-            d = np.einsum('dl,eabcl->eabcd', m_zeta, d)
-            integral[pix] = np.einsum('eabcd,ea,bcd->e', d, measure_em, measure_cds)
+        return np.array([np.einsum('eijkl,jkl->ei', d, weights) for d in density.contents])
 
-        return integral
+    @staticmethod
+    def _hat_cumulative_at_centers(axis: Axis) -> np.ndarray:
+        """
+        ``c[i, j]``: integral from the first edge of ``axis`` to center
+        ``j`` of the hat function of center ``i`` (see :meth:`_hat_integrals`).
+        """
+
+        centers = np.asarray(axis.centers)
+        unit = np.eye(len(centers))
+
+        return np.array([[IRFRelativeHistUnpolarized._integrate_piecewise_linear(unit[i], centers, axis.edges[0], c)
+                          for c in centers]
+                         for i in range(len(centers))])
+
+    def _hat_cumulative(self, x: np.ndarray) -> np.ndarray:
+        """
+        Integral from the first edge of the ``Epsilon`` axis to ``x`` (clipped to the
+        axis range) of the hat function of each center, in closed form.
+
+        Parameters
+        ----------
+        x : numpy.ndarray, shape (N,)
+
+        Returns
+        -------
+        numpy.ndarray, shape (N, nEpsilon)
+        """
+
+        axis = self._event_prob.axes['Epsilon']
+        centers, edges = np.asarray(axis.centers), np.asarray(axis.edges)
+        x = np.clip(x, edges[0], edges[-1])
+
+        if len(centers) == 1:
+            return (x - edges[0])[:, None]
+
+        # Between centers j and j+1 only these two hats are nonzero. At
+        # t = (x - c_j) / w the first adds w (t - t^2/2) and the second w t^2/2.
+        xc = np.clip(x, centers[0], centers[-1])
+        j = np.clip(np.searchsorted(centers, xc, side='right') - 1, 0, len(centers) - 2)
+        dx = xc - centers[j]
+        t = dx / (centers[j + 1] - centers[j])
+        rows = np.arange(len(x))
+
+        cum = self._hat_cum_at_centers[:, j].T.copy()
+        cum[rows, j] += dx * (1 - t / 2)
+        cum[rows, j + 1] += dx * t / 2
+
+        # The first and last hats are flat beyond the first/last center
+        cum[:, 0] -= np.clip(centers[0] - x, 0, None)
+        cum[:, -1] += np.clip(x - centers[-1], 0, None)
+
+        return cum
+
+    def _linear_selected_fraction(self, photons: PhotonListWithDirectionAndEnergyInSCFrameInterface) -> np.ndarray:
+        """
+        Fraction of the interpolated event probability of each photon whose
+        ``Em`` is inside the selections, using the same ``NuLambda`` and ``Ei``
+        interpolation weights as the density, so it is exactly consistent with
+        it. Zero for photons outside the ``Ei`` axis.
+        """
+
+        photon_lon_rad, photon_lat_rad, energy_keV = self._photon_list_to_raw_values(photons)
+        energy_keV = np.clip(np.asarray(energy_keV, dtype=float), 1e-10, None)
+        photon_dir = UnitSphericalRepresentation(lon=Quantity(photon_lon_rad, 'rad', copy=False),
+                                                 lat=Quantity(photon_lat_rad, 'rad', copy=False))
+
+        axes = self._event_prob.axes
+        pix, wpix = axes['NuLambda'].interp_weights(photon_dir)
+        ei_bins, wei = axes['Ei'].interp_weights(energy_keV)
+
+        hat_cum = np.zeros((len(energy_keV), axes['Epsilon'].nbins))
+        for lo, hi in self._selection_ranges:
+            hat_cum += self._hat_cumulative(hi / energy_keV - 1) - self._hat_cumulative(lo / energy_keV - 1)
+
+        fraction = np.zeros(len(energy_keV))
+        for p, w_p in zip(pix, wpix):
+            for k, w_k in zip(ei_bins, wei):
+                fraction += w_p * w_k * np.einsum('ni,ni->n', self._epsilon_marginal[p, k], hat_cum)
+
+        return np.where(self._in_ei_range(self._event_prob, energy_keV), fraction, 0.0)
 
     @staticmethod
     def _combine_selections(selections) -> Union[EnergySelector, None]:
@@ -514,266 +589,6 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
                    for c in chunks]
 
         return np.concatenate([f.result() for f in futures])
-
-    @staticmethod
-    def _selection_fraction(content_vs_epsilon: np.ndarray, target_ei_keV: np.ndarray,
-                            epsilon_centers: np.ndarray, epsilon_widths: np.ndarray,
-                            epsilon_edges: np.ndarray, selector: EnergySelector) -> np.ndarray:
-        """
-        Fraction of ``content_vs_epsilon``'s total (summed over
-        ``Epsilon``, per ``(NuLambda, Ei)``) whose measured energy
-        ``Em = Ei*(1 + Epsilon)`` falls within ``selector``'s ranges,
-        evaluated at each of ``target_ei_keV``'s *exact* values.
-
-        Within a single ``Ei`` value, both the selected part and the
-        total are integrals over ``Epsilon`` of the density linearly
-        interpolated between bin centers (and flat up to the axis
-        edges) -- see :meth:`_integrate_piecewise_linear` -- the same
-        model used to evaluate the differential effective area, so the
-        fraction is never above 1. With non-uniform ``Epsilon`` bins
-        this total differs slightly from the plain sum of the contents.
-
-        Parameters
-        ----------
-        content_vs_epsilon : numpy.ndarray, shape (npix, nEi, nEpsilon)
-            Per-``Epsilon``-bin effective area (cm^2), already evaluated
-            at each of ``target_ei_keV`` -- i.e. not itself interpolated
-            in ``Ei`` here, so the ``Em -> Epsilon`` conversion below
-            uses each target ``Ei`` exactly. See
-            :meth:`_apply_energy_selection` for how this is built.
-        target_ei_keV : numpy.ndarray, shape (nEi,)
-            True energy of each ``Ei`` slice of ``content_vs_epsilon``.
-        epsilon_centers, epsilon_widths, epsilon_edges : numpy.ndarray
-            ``irf``'s own ``Epsilon`` axis centers/widths/edges.
-        selector : EnergySelector
-            The (possibly multi-range) combined energy selection.
-
-        Returns
-        -------
-        numpy.ndarray, shape (npix, nEi)
-            Selected fraction of the total, per ``(NuLambda, Ei)``.
-        """
-
-        npix, nEi, _ = content_vs_epsilon.shape
-        fraction = np.ones((npix, nEi))
-
-        for i, ei in enumerate(target_ei_keV):
-            content_i = content_vs_epsilon[:, i, :]
-            density_i = content_i / epsilon_widths[None, :]
-            total_i = IRFRelativeHistUnpolarized._integrate_piecewise_linear(
-                density_i, epsilon_centers, epsilon_edges[0], epsilon_edges[-1])
-
-            selected_total = np.zeros(npix)
-
-            for lo_keV, hi_keV in selector.energy_ranges_keV:
-                eps_lo = np.clip(lo_keV / ei - 1, epsilon_edges[0], epsilon_edges[-1])
-                eps_hi = np.clip(hi_keV / ei - 1, epsilon_edges[0], epsilon_edges[-1])
-
-                if eps_lo <= epsilon_edges[0] and eps_hi >= epsilon_edges[-1]:
-                    # This range alone covers the whole bin -- exact,
-                    # and no other range can add anything more.
-                    selected_total = total_i
-                    break
-
-                selected_total = selected_total + IRFRelativeHistUnpolarized._integrate_piecewise_linear(
-                    density_i, epsilon_centers, eps_lo, eps_hi)
-
-            with np.errstate(invalid='ignore', divide='ignore'):
-                fraction[:, i] = np.nan_to_num(selected_total / total_i)
-
-        return fraction
-
-    @staticmethod
-    def _apply_energy_selection(irf: Histogram, tot_aeff: Histogram,
-                                 selector: EnergySelector, same_grid: bool) -> Histogram:
-        """
-        Scale ``tot_aeff`` down, per ``(NuLambda, Ei)``, by the fraction
-        of ``irf``'s effective area whose measured energy
-        ``Em = Ei*(1 + Epsilon)`` falls within ``selector``'s ranges.
-
-        If ``tot_aeff`` shares ``irf``'s own ``(NuLambda, Ei)`` grid
-        (``same_grid``), the fraction is evaluated directly there --
-        that's the only place the measured-energy distribution is
-        known, via :meth:`_selection_fraction`. Otherwise (the ``aeff``
-        constructor parameter gave a separate, typically finer, grid),
-        ``irf``'s own ``(NuLambda, Ei, Epsilon)`` response is first
-        interpolated -- in ``NuLambda``/``Ei`` only, one ``Epsilon`` bin
-        at a time, so ``Epsilon`` itself is not reinterpolated -- onto
-        ``tot_aeff``'s grid, and the selection fraction is then
-        evaluated at each of ``tot_aeff``'s own *exact* ``Ei`` values.
-
-        This matters for a narrow energy cut: ``Em -> Epsilon``
-        (``eps = Em/Ei - 1``) depends on ``Ei``, so the corresponding
-        ``Epsilon`` window shifts and rescales with it, and the
-        resulting *fraction* can vary sharply with ``Ei`` even where
-        the underlying response varies smoothly.
-
-        In that (separate ``aeff``) case, ``tot_aeff``'s ``Ei`` grid is
-        first refined near the cut boundaries -- see
-        :meth:`_refine_ei_edges` -- so the returned histogram can have
-        more ``Ei`` bins than ``tot_aeff``.
-
-        Parameters
-        ----------
-        irf : histpy.Histogram
-            The 6D response histogram, still in area (cm^2) units --
-            i.e. before the phase-space division that produces
-            ``_diff_aeff``.
-        tot_aeff : histpy.Histogram
-            The (as yet unmodified) total effective area to scale.
-        selector : EnergySelector
-            The (possibly multi-range) combined energy selection.
-        same_grid : bool
-            True if ``tot_aeff`` shares ``irf``'s own ``NuLambda``/``Ei``
-            grid (i.e. no separate ``aeff`` histogram was given), so the
-            fraction can be evaluated directly without interpolation.
-
-        Returns
-        -------
-        histpy.Histogram
-            ``tot_aeff``, scaled by the selection fraction.
-        """
-
-        epsilon_axis = irf.axes['Epsilon']
-        epsilon_centers = epsilon_axis.centers
-        epsilon_widths = epsilon_axis.widths
-        epsilon_edges = epsilon_axis.edges
-
-        irf_vs_epsilon = irf.project('NuLambda', 'Ei', 'Epsilon')  # cm^2, irf's own grid
-
-        if same_grid:
-            target_ei_keV = irf.axes['Ei'].centers
-            content_vs_epsilon = irf_vs_epsilon.contents
-
-            fraction = IRFRelativeHistUnpolarized._selection_fraction(
-                content_vs_epsilon, target_ei_keV, epsilon_centers, epsilon_widths, epsilon_edges, selector)
-
-            fraction_hist = Histogram(tot_aeff.axes, contents=fraction)
-
-            return tot_aeff * fraction_hist
-
-        # A narrow cut makes the fraction vary with Ei on a scale set by
-        # irf's Epsilon binning (~Ei * dEpsilon), typically much finer
-        # than tot_aeff's own Ei grid. Refine that grid where needed, so
-        # _tot_aeff (linearly interpolated in Ei at evaluation time)
-        # resolves the cut.
-        aeff_ei_axis = tot_aeff.axes['Ei']
-        refined_ei_edges = IRFRelativeHistUnpolarized._refine_ei_edges(
-            aeff_ei_axis.edges, epsilon_edges, epsilon_centers, selector)
-
-        if len(refined_ei_edges) > len(aeff_ei_axis.edges):
-            refined_ei_axis = Axis(refined_ei_edges, label='Ei', scale=aeff_ei_axis.axis_scale)
-            tot_aeff = IRFRelativeHistUnpolarized._regrid_ei(tot_aeff, refined_ei_axis)
-
-        nulambda_dir = tot_aeff.axes['NuLambda'].pix2skycoord(np.arange(tot_aeff.axes['NuLambda'].nbins))
-        target_ei_keV = tot_aeff.axes['Ei'].centers
-
-        lon_mesh, ei_mesh = np.meshgrid(nulambda_dir.lon.rad, target_ei_keV, indexing='ij')
-        lat_mesh, _ = np.meshgrid(nulambda_dir.lat.rad, target_ei_keV, indexing='ij')
-
-        photon_dir = UnitSphericalRepresentation(lon=Quantity(lon_mesh, 'rad', copy=False),
-                                                 lat=Quantity(lat_mesh, 'rad', copy=False))
-
-        # Interpolate irf's response onto tot_aeff's own (NuLambda, Ei)
-        # grid one Epsilon bin center at a time, so the result stays on
-        # irf's own native Epsilon binning.
-        content_vs_epsilon = np.empty((len(nulambda_dir), len(target_ei_keV), len(epsilon_centers)))
-        # In chunks of NuLambda, since interp()'s temporary arrays for the
-        # whole grid at once take several GB
-        for k, eps_k in enumerate(epsilon_centers):
-            for rows in np.array_split(np.arange(len(nulambda_dir)), 16):
-                eps_mesh = np.full_like(ei_mesh[rows], eps_k)
-                content_vs_epsilon[rows, :, k] = irf_vs_epsilon.interp(photon_dir[rows], ei_mesh[rows], eps_mesh)
-
-        fraction = IRFRelativeHistUnpolarized._selection_fraction(
-            content_vs_epsilon, target_ei_keV, epsilon_centers, epsilon_widths, epsilon_edges, selector)
-
-        return tot_aeff * fraction
-
-    @staticmethod
-    def _refine_ei_edges(ei_edges: np.ndarray, epsilon_edges: np.ndarray, epsilon_centers: np.ndarray,
-                         selector: EnergySelector, rtol: float = 1e-6) -> np.ndarray:
-        """
-        ``ei_edges`` plus extra edges wherever a cut boundary ``E_cut``
-        maps onto one of ``irf``'s ``Epsilon`` edges or centers, i.e. at
-        ``Ei = E_cut / (1 + Epsilon)``.
-
-        At fixed ``Ei`` the selection fraction integrates a density that
-        is piecewise-linear between ``Epsilon`` centers (and clipped at
-        the outer ``Epsilon`` edges), so as a function of ``Ei`` it has
-        kinks exactly where a cut boundary crosses an ``Epsilon`` center
-        or outer edge, and is smooth in between. Adding an edge at each
-        of those, plus at each inner ``Epsilon`` edge (roughly halfway
-        between consecutive kinks), gives about two ``Ei`` bins per
-        ``Epsilon`` bin that the cut boundary sweeps through.
-
-        Original edges are always kept, so ``Ei`` bins that no cut
-        boundary maps into keep their exact edges (and centers).
-
-        Parameters
-        ----------
-        ei_edges : numpy.ndarray
-            The (unitless, keV) ``Ei`` edges to refine.
-        epsilon_edges, epsilon_centers : numpy.ndarray
-            ``irf``'s own ``Epsilon`` axis edges/centers.
-        selector : EnergySelector
-            The (possibly multi-range) combined energy selection.
-        rtol : float, optional
-            New edges closer than ``rtol`` (relative) to an existing edge,
-            or to each other, are dropped, to avoid degenerate bins.
-
-        Returns
-        -------
-        numpy.ndarray
-            The refined, strictly increasing ``Ei`` edges.
-        """
-
-        ei_edges = np.asarray(ei_edges, dtype=float)
-
-        cut_bounds = np.asarray(selector.energy_ranges_keV, dtype=float).ravel()
-        cut_bounds = cut_bounds[np.isfinite(cut_bounds) & (cut_bounds > 0)]
-
-        one_plus_eps = 1 + np.concatenate((epsilon_edges, epsilon_centers))
-        one_plus_eps = one_plus_eps[one_plus_eps > 0]
-
-        new = np.unique(cut_bounds[:, None] / one_plus_eps[None, :])
-        new = new[(new > ei_edges[0]) & (new < ei_edges[-1])]
-
-        # Drop new edges too close to an original one...
-        idx = np.searchsorted(ei_edges, new)
-        dist = np.minimum(np.abs(new - ei_edges[idx - 1]), np.abs(ei_edges[idx] - new))
-        new = new[dist > rtol * new]
-
-        # ... or to the previous kept new edge.
-        if len(new):
-            keep = [new[0]]
-            for x in new[1:]:
-                if x - keep[-1] > rtol * x:
-                    keep.append(x)
-            new = np.asarray(keep)
-
-        return np.union1d(ei_edges, new)
-
-    @staticmethod
-    def _regrid_ei(tot_aeff: Histogram, new_ei_axis: Axis) -> Histogram:
-        """
-        ``tot_aeff`` (axes ``['NuLambda', 'Ei']``) re-sampled at
-        ``new_ei_axis``'s centers, using the original ``Ei`` axis's own
-        interpolation (``histpy.Axis.interp_weights``, i.e. log-domain for
-        a log-scaled axis) -- the same one ``tot_aeff.interp()`` would use
-        -- so bins whose center didn't move keep their value.
-        """
-
-        old_ei_axis = tot_aeff.axes['Ei']
-        old_contents = np.asarray(tot_aeff.contents)
-
-        if old_ei_axis.nbins == 1:
-            contents = np.repeat(old_contents, new_ei_axis.nbins, axis=1)
-        else:
-            bins, weights = old_ei_axis.interp_weights(new_ei_axis.centers)
-            contents = old_contents[:, bins[0]] * weights[0] + old_contents[:, bins[1]] * weights[1]
-
-        return Histogram(Axes([tot_aeff.axes['NuLambda'], new_ei_axis]), contents=contents)
 
     @staticmethod
     def _integrate_piecewise_linear(values: np.ndarray, x_centers: np.ndarray,
@@ -1027,7 +842,8 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
         any energy ``selections``.
 
         Interpolates the total effective area (``_tot_aeff``) at the
-        direction and energy of each photon in the list. It is zero for
+        direction and energy of each photon in the list, times the
+        selected fraction if there are selections. It is zero for
         photons outside the range of the ``Ei`` axis. See
         :meth:`_parallel_interp` for how this is (optionally)
         parallelized over threads.
@@ -1043,10 +859,15 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
             One effective-area value per photon, in cm^2.
         """
 
-        if self._interpolation == 'nearest' and self._has_selection:
-            return self._effective_area_cm2_unselected(photons) * self._nearest_selected_fraction(photons)
+        unselected = self._effective_area_cm2_unselected(photons)
 
-        return self._interp_aeff(self._tot_aeff, photons)
+        if not self._has_selection:
+            return unselected
+
+        if self._interpolation == 'nearest':
+            return unselected * self._nearest_selected_fraction(photons)
+
+        return unselected * self._linear_selected_fraction(photons)
 
     def _effective_area_cm2_unselected(self, photons: PhotonListWithDirectionAndEnergyInSCFrameInterface) -> Iterable[float]:
         """
@@ -1054,7 +875,7 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
         ``selections``.
         """
 
-        return self._interp_aeff(self._aeff_unselected, photons)
+        return self._interp_aeff(self._tot_aeff, photons)
 
     def _interp_aeff(self, aeff: Histogram, photons: PhotonListWithDirectionAndEnergyInSCFrameInterface) -> np.ndarray:
         """
@@ -1126,6 +947,8 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
         """
         ``_event_prob`` interpolated at each (photon, event) pair, in
         ``1 / sr / rad / keV``, without any selection fraction applied.
+        In the ``'linear'`` mode the stored table is per unit ``Epsilon``, so
+        the interpolated value is divided by the photon energy.
 
         For each pair the incident photon direction and energy are
         combined with the event's scattered direction, kinematic
@@ -1193,9 +1016,10 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
                                                             lat=Quantity(lat_rad, 'rad', copy=False))
             return photon_dir_chunk, energy_keV, eps, phi, theta, zeta_r
 
+        # The table is per unit Epsilon, and dEm = Ei * dEpsilon
         prob = np.asarray(self._parallel_interp(self._event_prob, build_args,
                                                 (photon_lon_rad, photon_lat_rad, photon_energy_keV,
-                                                 epsilon, phi_kin_rad, theta_rad, zeta_rad)))
+                                                 epsilon, phi_kin_rad, theta_rad, zeta_rad))) / photon_energy_keV
 
         # interp() clamps to the edge bins, which would extend their density
         # indefinitely

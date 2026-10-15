@@ -178,45 +178,51 @@ if it's blocked, say so and validate with synthetic histograms.
   (`cosipy/event_selection/energy_selection.py`) has
   `energy_ranges_keV`, `min/max_energy[_keV]`, `union`, `intersect`,
   `except_`.
-- `_apply_energy_selection` scales `_tot_aeff` per `(NuLambda, Ei)` by the
-  fraction of area with `Em` inside the cut. `_diff_aeff` is never modified.
-  - **Same grid** (no separate `aeff`): the fraction is computed at irf's own
-    `Ei` centers and the grid is not refined.
-  - **Separate `aeff`**:
-    1. `_refine_ei_edges` adds `Ei` edges at `E_cut / (1 + Epsilon)` for
-       every Epsilon edge and center (the fraction's kinks), keeping all the
-       original edges.
-    2. `_regrid_ei` resamples `aeff` onto the refined grid using the axis's
-       own `interp_weights`.
-    3. irf's `(NuLambda, Ei, Epsilon)` projection is interpolated onto that
-       grid one Epsilon center at a time.
-    4. `_selection_fraction` evaluates the cut at each exact target `Ei`.
+- `_tot_aeff` is always the unselected total effective area (linearly
+  interpolated in `Ei`). With selections, `_effective_area_cm2` is
+  `_effective_area_cm2_unselected` times the selected fraction of the
+  photon's own event probability; `_event_probability` divides by that
+  fraction. `_diff_aeff`/`_event_prob` are never modified.
+  - **Linear mode** (`_linear_selected_fraction`): the fraction is computed
+    per photon from the same interpolation as the density: the same
+    `NuLambda` (4 pixels) and `Ei` (2 bins, log-domain) weights, and the
+    `Epsilon` marginal `_epsilon_marginal` (CDS-integrated table per
+    `(NuLambda, Ei, Epsilon center)`) contracted with the exact integral of
+    each `Epsilon` hat function over the cut (`_hat_cumulative`, closed form,
+    arguments `E_cut / Ei - 1` clipped to the axis). So the selected area is
+    exactly the integral of the differential area over the selected `Em`,
+    there is no `Ei` grid refinement, and a cut covering everything gives
+    exactly 1.
+  - **Nearest mode** (`_nearest_selected_fraction`): the fraction of the
+    photon's own `(NuLambda, Ei)` bin content in the cut.
+- `_integrate_piecewise_linear` integrates a function that is linear between
+  centers and flat beyond the first/last center. It is used for the hat
+  integrals. Integrating over the full range is **not** exactly the content
+  sum when bins are non-uniform, which is why the normalization uses the
+  interpolant's integral.
 
-    So `_tot_aeff` can end up with more `Ei` bins than the `aeff` passed in.
-- `_integrate_piecewise_linear` integrates the per-Epsilon density
-  (content/ΔEps), linear between centers and flat beyond the first/last
-  center. The selected fraction divides by the same integral over the full
-  Epsilon axis (not `content.sum()`, which differs for non-uniform bins and
-  made the fraction exceed 1 by up to 24% on the real hist_simple file).
-  That is also how `_differential_effective_area_cm2` evaluates the density
-  (zero outside the Epsilon axis).
+### Lessons from the normalization and the selection
 
-### Lessons from debugging narrow energy cuts
-
-- The two changes that mattered:
-  1. Evaluate the fraction at the target `Ei` instead of interpolating a
-     fraction computed on irf's coarse grid.
-  2. Refine the `aeff` grid. With `geomspace(50, 10000, 41)` and a
-     495–505 keV cut, sampling only at bin centers made the integral over
-     `Ei` about 2× too large; refining brings it within 0.2%.
+- In linear mode the stored table is the density per unit `Epsilon`
+  (normalized per keV at the `Ei` center, times `Ei_center`), divided by the
+  photon's `Ei` when evaluated. Interpolation happens at fixed `Epsilon`,
+  where `dEm = Ei * dEps`, so a per-keV table interpolated between `Ei`
+  centers integrated to `(1-t) r^t + t r^(t-1) >= 1` (up to ~2%). Per unit
+  `Epsilon` each neighbor integrates to 1 and so does any convex
+  combination. (An earlier attempt to interpolate content as a density
+  across `Ei` was reverted as not worth the complexity; this is the version
+  that is needed for the normalization.)
+- In a background-dominated unbinned fit, any mismatch between the integral
+  of the source density over the selected data space and the expected counts
+  (the selected effective area) biases the flux by ~20x the mismatch. That is
+  why the selected fraction is computed from the interpolated density itself
+  and not from a separately interpolated/refined `aeff`.
 - Integrating over `dEps` vs `dEm` at a fixed `Ei` is just a change of
   variables (numerically identical), so it's not a source of error.
-- Interpolating content as a density across `Ei` (divide by native `Ei`,
-  multiply by the target) was tried and reverted as not worth the
-  complexity.
 - A synthetic test whose Epsilon profile has the same shape and scale at
   every `Ei` can't catch `Ei`-interpolation problems. Use shapes that vary
-  with `Ei` when testing those.
+  with `Ei` when testing those, and photons between `Ei` and `NuLambda`
+  centers.
 
 ## Validating on real files in a sandbox
 
