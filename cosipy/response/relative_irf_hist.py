@@ -782,11 +782,15 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
         return Histogram(new_axes, contents=contents, unit=unit, copy_contents=False)
 
     @classmethod
-    def from_h5(cls, filename, *args, **kwargs):
+    def from_h5(cls, filename, *args, broadened=False, **kwargs):
         """
         Construct an :class:`IRFRelativeHistUnpolarized` from an HDF5
         file that stores the response histogram under the group
         ``"IRF"``.
+
+        With ``broadened=True``, the groups ``"BROADENED_IRF"`` and
+        ``"BROADENED_AEFF"`` are read instead of ``"IRF"`` and ``"AEFF"``
+        (see :mod:`cosipy.response.broadened_relative_irf_hist`).
 
         If the file also has a group named ``"AEFF"``, it is read as
         well and passed to :meth:`__init__` as the ``aeff`` argument
@@ -813,6 +817,8 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
             Path to the HDF5 file containing the response histogram
             (and, optionally, the separate total effective area
             histogram).
+        broadened : bool
+            Whether to read the broadened IRF instead of the original.
         *args, **kwargs
             Extra arguments forwarded verbatim to
             :meth:`__init__` (e.g. ``aeff``, ``copy``, ``nthreads``,
@@ -827,36 +833,38 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
             disk.
         """
 
+        irf_name, aeff_name = ("BROADENED_IRF", "BROADENED_AEFF") if broadened else ("IRF", "AEFF")
+
         selector = cls._combine_selections(kwargs.get('selections'))
 
         if selector is None:
             def open_irf():
-                return Histogram.open(filename, "IRF")
+                return Histogram.open(filename, irf_name)
 
             def open_aeff(irf):
-                return Histogram.open(filename, "AEFF")
+                return Histogram.open(filename, aeff_name)
         else:
             ranges = selector.energy_ranges_keV
 
             with h5.File(filename, 'r') as f:
-                epsilon_edges = u.Quantity(Axes.open(f['IRF/axes'])['Epsilon'].edges).to_value('')
+                epsilon_edges = u.Quantity(Axes.open(f[f'{irf_name}/axes'])['Epsilon'].edges).to_value('')
 
             # Em in [a*(1 + eps_min), b*(1 + eps_max)] for Ei in [a, b)
             ei_min = ranges[:, 0].min() / (1 + epsilon_edges[-1])
             ei_max = ranges[:, 1].max() / (1 + epsilon_edges[0]) if epsilon_edges[0] > -1 else np.inf
 
             def open_irf():
-                return cls._open_h5_ei_range(filename, "IRF", ei_min, ei_max)
+                return cls._open_h5_ei_range(filename, irf_name, ei_min, ei_max)
 
             def open_aeff(irf):
                 ei_edges = irf.axes['Ei'].edges.to_value(u.keV)
-                return cls._open_h5_ei_range(filename, "AEFF", ei_edges[0], ei_edges[-1])
+                return cls._open_h5_ei_range(filename, aeff_name, ei_edges[0], ei_edges[-1])
 
         irf = open_irf()
 
         if 'aeff' not in kwargs and len(args) == 0:
             with h5.File(filename, 'r') as f:
-                if 'AEFF' in f:
+                if aeff_name in f:
                     kwargs['aeff'] = open_aeff(irf)
 
         if len(args) < 2:
