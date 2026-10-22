@@ -147,6 +147,18 @@ def events_on_sub_cells(model, lon, lat, energy, extra_eps=(), nsub=4):
 
     return photons, events, em, weight[keep]
 
+
+def event_probability_in_chunks(model, photons, events, chunk=1_000_000):
+    """Evaluated in chunks of events, to limit the memory of the interpolation."""
+
+    return np.concatenate([
+        np.asarray(model.event_probability(
+            photon_list(*(np.asarray(a)[i:i + chunk] for a in (photons.direction_lon_rad_sc,
+                                                               photons.direction_lat_rad_sc, photons.energy_keV))),
+            event_list(*(np.asarray(a)[i:i + chunk] for a in (events.scattered_lon_rad_sc, events.scattered_lat_rad_sc,
+                                                              events.scattering_angle_rad, events.energy_keV)))))
+        for i in range(0, len(np.asarray(photons.energy_keV)), chunk)])
+
 # %% [markdown]
 # Photons with energies between the `Ei` centers (359, 454, 553, 741 keV), and random
 # directions (not at pixel centers):
@@ -192,7 +204,7 @@ def integrate(model_class):
     for lon, lat, energy in zip(photon_lon, photon_lat, photon_energies):
         t0 = time.time()
         photons, events, em, weight = events_on_sub_cells(model, lon, lat, energy, cut_boundaries / energy - 1)
-        prob = np.asarray(model.event_probability(photons, events)) * weight
+        prob = event_probability_in_chunks(model, photons, events) * weight
         for name, sel in cuts.items():
             inside = np.ones(len(em), bool) if sel is None else np.zeros(len(em), bool)
             for lo, hi in ([] if sel is None else sel.energy_ranges_keV):
