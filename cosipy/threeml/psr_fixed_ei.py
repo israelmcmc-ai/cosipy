@@ -1,4 +1,5 @@
 import copy
+import gc
 from typing import Iterable, List, Optional, Sequence, Tuple, Type, Union
 
 import numpy as np
@@ -333,6 +334,11 @@ class UnbinnedThreeMLPointSourceResponseTrapz(UnbinnedThreeMLSourceResponseInter
                 exposure, response = self._area_and_response(piece_irf, self._nodes_keV[n], lon, lat, time_weights)
                 self._exposure[node] += exposure
                 self._event_resp[:, node] += response
+
+            # Histograms are in reference cycles (with their accessors), so the tables of
+            # a cell would only be freed by the cyclic garbage collector, after several cells
+            del irf_r, irf_l, piece_irf
+            gc.collect()
 
         # Lines, with the original IRF
         nlines = self._line_energies_keV.size
