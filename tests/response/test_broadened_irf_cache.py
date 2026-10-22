@@ -179,3 +179,23 @@ def EnergySelectorAll():
 def EnergySelectorCut():
     from cosipy.event_selection.energy_selection import EnergySelector
     return EnergySelector([150., 250.] * u.keV)
+
+
+def test_without_a_file_same_pieces(cache, irf):
+    """Without a file the pieces are computed on demand and not kept, with the same result."""
+
+    memory = BroadenedIRFCache(irf, energy_range_keV=(100., 1000.), max_level=3)
+    lo = cache.cell_edges_keV(2, 1)[0]
+    lon, lat = pixel_direction(irf)
+    photons = PhotonListWithDirectionAndEnergyInSCFrame(np.array([lon]), np.array([lat]), np.array([lo]))
+
+    for from_file, from_memory in zip(cache.piece_irfs(2, 1), memory.piece_irfs(2, 1)):
+        assert from_memory.effective_area_cm2(photons) == pytest.approx(from_file.effective_area_cm2(photons),
+                                                                        rel=1e-6)
+        np.testing.assert_allclose(from_memory._event_prob.contents[from_memory._loaded],
+                                   from_file._event_prob.contents[from_file._loaded], rtol=1e-6)
+
+    assert not memory._memory  # both pieces read, nothing left
+
+    with pytest.raises(RuntimeError):
+        memory.ensure([(0, 0)], [PIXEL])

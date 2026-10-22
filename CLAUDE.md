@@ -272,9 +272,16 @@ if it's blocked, say so and validate with synthetic histograms.
   selection are skipped). `cells_for(spectrum, cache, accuracy)` refines
   while `(Delta^2/8) max|g''|/mean(g) > accuracy` on a dense grid; lines must
   be `DiracDelta` (`mono_nodes_of`), evaluated with the original IRF.
-- Storage: chunked dense rows (one chunk per NuLambda pixel, unallocated
-  until written) + a `computed` mask set after the rows are flushed; a
-  `<cache>.lock` file for a single writer (delete it after a crash).
+- Storage: by default (`filename=None`) nothing is kept: each piece IRF gets
+  a row provider (`_PieceRows`, `IRFRelativeHistUnpolarized` accepts any object
+  with `axes`, `unit`, `read_pixel(pixel) -> (contents, area)`) that computes
+  the pixel when the lazy loader needs it (both pieces at once). With a file:
+  chunked dense rows (one chunk per NuLambda pixel, unallocated until written)
+  + a `computed` mask set after the rows are flushed, and a `<cache>.lock` file
+  for a single writer (delete it after a crash). Why not always a file: ~45 MB
+  per pixel for 16 cells (3.5x the IRF), 151 pixels for the 3 h Crab track
+  (DC4 rocks), ~34 GB for the whole sky; computing costs 45 ms per
+  cell-pixel vs 12 ms to read it (+26 ms normalizing either way), ~2x overall.
 - Supersedes #15's per-event (Epsilon-driven) nodes; #15's tests were
   replaced. Validation: `validation/trapz_broadened/`.
 

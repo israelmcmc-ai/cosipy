@@ -180,7 +180,7 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
 
     Parameters
     ----------
-    irf : histpy.Histogram, str or path-like
+    irf : histpy.Histogram, str, path-like or row provider
         A 6D histogram with the axes described above and contents in
         units equivalent to area (``cm^2``), or an HDF5 file with that
         histogram in the group ``group`` (default ``'IRF'``), in the dense
@@ -190,7 +190,9 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
         opened for each read. With ``selections``, only the ``Ei`` bins that
         can produce a measured energy inside them are read (see
         :meth:`_open_h5_axes`); photons outside those bins get zero area and
-        probability, which is what the selection gives them anyway.
+        probability, which is what the selection gives them anyway. A row
+        provider, an object with ``axes``, ``unit`` and ``read_pixel`` (see
+        :meth:`_load_pixels`), is loaded lazily the same way, without ``aeff``.
     aeff : histpy.Histogram, optional
         A separate 2D histogram, with axes ``['NuLambda', 'Ei']`` and
         contents in units equivalent to area (``cm^2``), used as the
@@ -323,9 +325,14 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
                 irf = irf.copy()
             axes, unit = irf.axes, irf.unit
             self._source = None
-        else:
+        elif isinstance(irf, (str, Path)):
             axes, unit, ei_bins = self._open_h5_axes(irf, group, combined_selector)
             self._source = (irf, group, ei_bins)
+        else:
+            # Rows computed on demand by a provider (e.g. the broadened kernels of
+            # BroadenedIRFCache), with `axes`, `unit` and `read_pixel(pixel)`
+            axes, unit = irf.axes, irf.unit
+            self._source = irf
 
         self._standardize_axes(axes, unit)
 
@@ -491,7 +498,21 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
         """
         Read the contents of the ``NuLambda`` ``pixels`` from the file, directly
         into ``_event_prob``, and normalize them. The file is opened for each call.
+
+        With a row provider instead of a file, its ``read_pixel(pixel)`` returns the
+        contents of the pixel (cm2 per bin, axes ``Ei``, ``Epsilon``, ``Phi``,
+        ``Theta``, ``Zeta``) and its total effective area per ``Ei`` bin, which is
+        used instead of the projection of the contents.
         """
+
+        if not isinstance(self._source, tuple):
+            for pixel in pixels:
+                contents = self._event_prob.contents[pixel]
+                contents[...], area = self._source.read_pixel(pixel)
+                contents *= self._area_unit_factor
+                self._normalize_pixel(pixel, contents)
+                self._tot_aeff.contents[pixel] = area
+            return
 
         filename, group, ei_bins = self._source
 

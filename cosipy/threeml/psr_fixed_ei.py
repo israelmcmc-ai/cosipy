@@ -6,7 +6,6 @@ from astromodels import DiracDelta, PointSource
 from astromodels.functions.function import CompositeFunction, Function
 from astromodels.sources import Source
 from astropy import units as u
-from astropy.coordinates import UnitSphericalRepresentation
 from astropy.units import Quantity
 
 from cosipy import SpacecraftHistory
@@ -61,7 +60,8 @@ class UnbinnedThreeMLPointSourceResponseTrapz(UnbinnedThreeMLSourceResponseInter
         ``irf``, which is consistent on its own.
 
         The kernels are computed (or read from the cache file) for the ``NuLambda``
-        pixels that the source track needs, and only when the source location changes.
+        pixels that the source track needs, one cell at a time, and only when the
+        source location changes.
 
         Parameters
         ----------
@@ -318,11 +318,6 @@ class UnbinnedThreeMLPointSourceResponseTrapz(UnbinnedThreeMLSourceResponseInter
         lat = np.atleast_1d(np.asarray(sc_coord.lat.rad, dtype=float))
         self._visible = ~np.atleast_1d(np.asarray(self._sc_ori_mid.get_earth_occ(coord), dtype=bool))
         time_weights = self._livetime_s * self._visible
-
-        # Kernels for the pixels that the track needs
-        pixels, weights = self._irf.axes['NuLambda'].interp_weights(
-            UnitSphericalRepresentation(lon=lon * u.rad, lat=lat * u.rad))
-        self._cache.ensure(self._cells, np.unique(np.asarray(pixels)[np.asarray(weights) != 0]))
 
         nnodes = self._nodes_keV.size
         self._exposure = np.zeros(nnodes)

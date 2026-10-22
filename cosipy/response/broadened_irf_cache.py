@@ -21,9 +21,10 @@ the lower and upper children, ``R = R1/2 + L2/2 + R2`` and ``L = L1 + R1/2 + L2/
 So a coarse cell can be built from finer ones that are already computed, which is much
 cheaper than computing it from the IRF.
 
-Each piece is stored as an IRF in the same format as :class:`IRFRelativeHistUnpolarized`
-(contents per bin in cm2, plus a separate total effective area), with a single ``Ei``
-bin, the cell, and ``Epsilon' = Em / a - 1`` instead of ``Epsilon``. It is evaluated as
+Each piece is an IRF in the same format as :class:`IRFRelativeHistUnpolarized` (contents
+per bin in cm2, plus a total effective area), with a single ``Ei`` bin, the cell, and
+``Epsilon' = Em / a - 1`` instead of ``Epsilon``. Its ``NuLambda`` pixels are computed
+when an evaluation needs them, and optionally kept in an HDF5 file. It is evaluated as
 an :class:`IRFRelativeHistUnpolarized` at the photon energy ``a``, which normalizes it
 and computes its selected effective area from the same table. The integral of each
 piece's differential effective area over the selected data space is then exactly its
@@ -31,8 +32,8 @@ selected effective area, so a folding that uses the pieces for both the density 
 the expected counts is consistent for any grid: the error of the interpolation of ``g``
 only changes the shape of the model, not its normalization.
 
-HDF5 layout, under ``/BROADENED`` (the attributes describe how it was built, and are
-checked when the cache is opened again)::
+HDF5 layout of the optional file, under ``/BROADENED`` (the attributes describe how it
+was built, and are checked when the cache is opened again)::
 
     BROADENED/                attrs: energy_range_keV, cells_per_decade, weight_index,
                                      energy_degree (1: hats linear in ln E),
@@ -81,9 +82,12 @@ class BroadenedIRFCache:
     irf : IRFRelativeHistUnpolarized
         The response. Its selections, if any, are not used: they are applied when the
         pieces are evaluated (see :meth:`piece_irfs`).
-    filename : str or path-like
-        HDF5 file of the cache. It can be the file of the IRF. If it already has a
-        cache, it must have been built with the same parameters and IRF.
+    filename : str or path-like, optional
+        HDF5 file to keep the pieces in. It can be the file of the IRF. If it already
+        has a cache, it must have been built with the same parameters and IRF. By
+        default (None) the pieces are computed when an evaluation needs them and not
+        kept: that is about twice as slow as reading them from the file, but a file
+        takes ~45 MB per ``NuLambda`` pixel for a grid of 16 cells.
     energy_range_keV : tuple of float
         Energy range of the integral over the photon energy, and of the level-0 cells.
     cells_per_decade : int
@@ -107,7 +111,7 @@ class BroadenedIRFCache:
 
     def __init__(self,
                  irf: IRFRelativeHistUnpolarized,
-                 filename: Union[str, Path],
+                 filename: Union[str, Path, None] = None,
                  energy_range_keV: Tuple[float, float] = (100., 10_000.),
                  cells_per_decade: int = 1,
                  weight_index: float = -2.,
@@ -117,7 +121,8 @@ class BroadenedIRFCache:
                  max_level: int = 6):
 
         self._irf = irf
-        self._filename = Path(filename)
+        self._filename = None if filename is None else Path(filename)
+        self._memory = {}  # (level, index, pixel) -> rows not read yet, without a file
         self._log10_range = np.log10(np.asarray(energy_range_keV, dtype=float))
         self._cells_per_decade = int(cells_per_decade)
         self._weight_index = float(weight_index)
@@ -149,7 +154,8 @@ class BroadenedIRFCache:
                        'irf_id': self._irf_id(irf),
                        'version': VERSION}
 
-        self._open_or_create()
+        if self._filename is not None:
+            self._open_or_create()
 
     @property
     def energy_range_keV(self) -> np.ndarray:
@@ -247,6 +253,16 @@ class BroadenedIRFCache:
                 PolarizationAxis(np.asarray(axes['Zeta'].edges) * u.rad, convention=self._irf._pol_convention,
                                  label='Zeta')]
 
+    def _piece_axes(self, level: int, index: int) -> Tuple[Axes, Axes]:
+        """Axes, with units, of the pieces of a cell and of their total effective area."""
+
+        lo, hi = self.cell_edges_keV(level, index)
+        nulambda = self._irf.axes['NuLambda']
+        ei_axis = Axis([lo, hi] * u.keV, label='Ei', scale='log')
+        irf_axes = Axes([nulambda, ei_axis] + self._cds_axes(Axis(self.epsilon_edges(level, index), label='Epsilon')))
+
+        return irf_axes, Axes([nulambda, ei_axis])
+
     def _cell_path(self, level: int, index: int) -> str:
         return f'{ROOT}/e{level}/c{index}/point'
 
@@ -259,9 +275,7 @@ class BroadenedIRFCache:
         group.attrs['energy_range_keV'] = [lo, hi]
 
         nulambda = self._irf.axes['NuLambda']
-        ei_axis = Axis([lo, hi] * u.keV, label='Ei', scale='log')
-        irf_axes = Axes([nulambda, ei_axis] + self._cds_axes(Axis(self.epsilon_edges(level, index), label='Epsilon')))
-        aeff_axes = Axes([nulambda, ei_axis])
+        irf_axes, aeff_axes = self._piece_axes(level, index)
 
         for piece in PIECES:
             for name, axes, dtype in ((piece, irf_axes, np.float32), (f'AEFF_{piece}', aeff_axes, np.float64)):
@@ -275,8 +289,14 @@ class BroadenedIRFCache:
 
         group.create_dataset('computed', shape=(nulambda.nbins,), dtype=bool, fillvalue=False, track_times=False)
 
+    def _require_file(self):
+        if self._filename is None:
+            raise RuntimeError("This cache has no file")
+
     def computed(self, level: int, index: int) -> np.ndarray:
-        """Whether each ``NuLambda`` pixel of a cell has been computed."""
+        """Whether each ``NuLambda`` pixel of a cell has been computed and stored."""
+
+        self._require_file()
 
         with h5.File(self._filename, 'r') as f:
             path = self._cell_path(level, index)
@@ -326,11 +346,12 @@ class BroadenedIRFCache:
 
     def ensure(self, cells: Iterable[Tuple[int, int]], pixels: Iterable[int]):
         """
-        Compute the ``pixels`` of each ``(level, index)`` cell that are not in the cache
-        yet: from its children if they are both computed for those pixels, else from
-        the IRF.
+        Compute and store the ``pixels`` of each ``(level, index)`` cell that are not in
+        the file yet: from its children if they are both stored for those pixels, else
+        from the IRF.
         """
 
+        self._require_file()
         pixels = np.unique(np.asarray(list(pixels), dtype=int))
 
         for level, index in cells:
@@ -356,8 +377,8 @@ class BroadenedIRFCache:
 
     def precompute(self, level: int, pixels: Iterable[int] = None):
         """
-        Compute all the cells of ``level`` from the IRF, and every coarser level from
-        them, for ``pixels`` (default: all).
+        Compute and store all the cells of ``level`` from the IRF, and every coarser
+        level from them, for ``pixels`` (default: all).
         """
 
         if pixels is None:
@@ -460,10 +481,10 @@ class BroadenedIRFCache:
     def piece_irfs(self, level: int, index: int, selections=None) -> Tuple[IRFRelativeHistUnpolarized,
                                                                           IRFRelativeHistUnpolarized]:
         """
-        The ``R`` and ``L`` pieces of a cell as IRFs, read lazily from the cache, to be
-        evaluated with a photon energy equal to the lower edge of the cell (see
-        :meth:`cell_edges_keV`). Only its computed pixels have meaningful values, so
-        :meth:`ensure` must have been called for the pixels that will be evaluated.
+        The ``R`` and ``L`` pieces of a cell as IRFs, to be evaluated with a photon
+        energy equal to the lower edge of the cell (see :meth:`cell_edges_keV`). Each
+        ``NuLambda`` pixel is computed (or read from the file) the first time an
+        evaluation needs it.
 
         Parameters
         ----------
@@ -471,10 +492,40 @@ class BroadenedIRFCache:
             Measured-energy selection, as for :class:`IRFRelativeHistUnpolarized`.
         """
 
-        path = self._cell_path(level, index)
-
-        return tuple(IRFRelativeHistUnpolarized(self._filename,
-                                                aeff=Histogram.open(self._filename, f'{path}/AEFF_{piece}'),
-                                                group=f'{path}/{piece}',
-                                                selections=selections)
+        return tuple(IRFRelativeHistUnpolarized(_PieceRows(self, level, index, piece), selections=selections)
                      for piece in PIECES)
+
+    def _read_piece_pixel(self, level: int, index: int, piece: str, pixel: int):
+        """Contents and total effective area of one pixel of a piece."""
+
+        if self._filename is not None:
+            self.ensure([(level, index)], [pixel])
+            rows = self._read_rows(level, index, [pixel])
+            return rows[piece][0], rows[f'AEFF_{piece}'][0]
+
+        # Both pieces are computed together, and kept until the other one is read
+        key = (level, index, pixel)
+        if key not in self._memory:
+            self._memory[key] = {name: values[0] for name, values in
+                                 self._direct(level, index, np.array([pixel])).items()}
+        rows = self._memory[key]
+        contents, area = rows.pop(piece), rows.pop(f'AEFF_{piece}')
+        if not rows:
+            del self._memory[key]
+
+        return contents, area
+
+
+class _PieceRows:
+    """
+    Row provider of one piece of a cell, for :class:`IRFRelativeHistUnpolarized`: the
+    axes and unit of the piece, and its contents and total effective area per pixel.
+    """
+
+    def __init__(self, cache: BroadenedIRFCache, level: int, index: int, piece: str):
+        self._cache, self._level, self._index, self._piece = cache, level, index, piece
+        self.axes = cache._piece_axes(level, index)[0]
+        self.unit = u.cm ** 2
+
+    def read_pixel(self, pixel: int):
+        return self._cache._read_piece_pixel(self._level, self._index, self._piece, pixel)
