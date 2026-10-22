@@ -154,6 +154,30 @@ legibility). Supersedes PRs #15, #26, #27, #28 (closed or to be closed).
   ideal background, histogram background (template from bkg only and from all
   events). Update the GRB and Crab tutorials.
 
+### Status (update as PRs progress)
+
+- PR 1: israelmcmc-ai/cosipy#31 (branch `irf-normalization`), open, watched.
+  Validation notebook `validation/irf_normalization/`. histpy pinned to the
+  burstcube GitLab branch `claude/determined-ride-20as3h` until released.
+- Side fix `to_relative` arccos clip: merged upstream (cositools/cosipy#666);
+  fork `develop` force-synced to `cositools/develop`.
+- PR 2: israelmcmc-ai/cosipy#32 (branch `irf-lazy-loading`, on PR 1), open,
+  watched. Validation notebook `validation/irf_lazy_loading/`.
+- PR 3: branch `trapz-broadened` (on PR 2), not opened yet. Done:
+  `cosipy/response/broadened_irf_cache.py` (`BroadenedIRFCache`: pieces stored
+  as one-Ei-bin IRFs in the IRF's own HDF5 format, chunked rows + `computed`
+  mask instead of appendable rows; per-cell Eps' edges = input Eps edges +
+  uniform ln(1+Eps') grid of step min(cell width/16, ln10/64); direct
+  contraction of the normalized table; exact children->parent merge with a
+  content-conserving Eps' rebin; lock file) and the rewritten
+  `UnbinnedThreeMLPointSourceResponseTrapz` in `cosipy/threeml/psr_fixed_ei.py`
+  (`cells_for`, `mono_nodes_of`). Tests pass (`tests/response/test_broadened_irf_cache.py`,
+  `tests/threeml/test_psr_trapz.py`). Build the cache from the IRF *without*
+  selections (with selections PR 2 restricts Ei and the cache id differs).
+  Remaining: validation notebook on the real file (accuracy vs brute force,
+  integral of s = S, cache timings), CLAUDE.md notes, open the PR, close #15.
+- PR 4, PR 5: not started.
+
 ### Deferred
 
 - Adaptive folding: leave out.
