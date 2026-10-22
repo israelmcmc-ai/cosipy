@@ -171,6 +171,9 @@ legibility). Supersedes PRs #15, #26, #27, #28 (closed or to be closed).
   contraction of the normalized table; exact children->parent merge with a
   content-conserving Eps' rebin; lock file) and the rewritten
   `UnbinnedThreeMLPointSourceResponseTrapz` in `cosipy/threeml/psr_fixed_ei.py`
+  (maintainer decision: kernels computed on demand in memory by default, the
+  HDF5 file is optional: ~45 MB/pixel on disk, 151 pixels for a 3 h track;
+  computing is ~2x slower than reading)
   (`cells_for`, `mono_nodes_of`). Tests pass (`tests/response/test_broadened_irf_cache.py`,
   `tests/threeml/test_psr_trapz.py`). Build the cache from the IRF *without*
   selections (with selections PR 2 restricts Ei and the cache id differs).
