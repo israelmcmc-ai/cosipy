@@ -20,6 +20,7 @@
 # loaded. Photons are kept between the outer centers of these bins.
 
 # %%
+import gc
 import importlib.util
 import subprocess
 import tempfile
@@ -193,12 +194,26 @@ cut_boundaries = cut_boundaries[np.isfinite(cut_boundaries)]
 
 # %%
 def integrate(model_class):
-    """Integral of the unconditional probability per photon and cut, and the selected fractions."""
+    """Integral of the conditional probability per photon and cut.
+
+    The models with selections are built first, one at a time: building one with
+    the previous version peaks at ~10 GB (its Ei grid refinement).
+    """
+
+    photons_all = photon_list(photon_lon, photon_lat, photon_energies)
+
+    areas = {}
+    for name, sel in cuts.items():
+        irf, aeff = load_slice()
+        model = model_class(irf, aeff=aeff, copy=False, selections=sel)
+        areas[name] = np.asarray(model._effective_area_cm2(photons_all))
+        del model, irf, aeff
+        gc.collect()
+
+    fractions = {name: areas[name] / areas['none'] for name in cuts}
 
     irf, aeff = load_slice()
     model = model_class(irf, aeff=aeff, copy=False)
-    photons_all = photon_list(photon_lon, photon_lat, photon_energies)
-    unselected = np.asarray(model._effective_area_cm2(photons_all))
 
     integrals = {name: [] for name in cuts}
     for lon, lat, energy in zip(photon_lon, photon_lat, photon_energies):
@@ -211,16 +226,8 @@ def integrate(model_class):
                 inside |= (em >= lo) & (em < hi)
             integrals[name].append(prob[inside].sum())
         print(f'{energy:5.0f} keV: {len(em)} events, {time.time() - t0:.1f} s')
-    del model, irf
-
-    fractions = {'none': np.ones(len(photon_energies))}
-    for name, sel in cuts.items():
-        if sel is None:
-            continue
-        irf, aeff = load_slice()
-        model = model_class(irf, aeff=aeff, copy=False, selections=sel)
-        fractions[name] = np.asarray(model._effective_area_cm2(photons_all)) / unselected
-        del model, irf
+    del model, irf, aeff, photons, events
+    gc.collect()
 
     return {name: np.asarray(integrals[name]) / fractions[name] for name in cuts}
 
