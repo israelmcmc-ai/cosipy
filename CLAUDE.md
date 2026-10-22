@@ -79,12 +79,18 @@ legibility). Supersedes PRs #15, #26, #27, #28 (closed or to be closed).
 - Em selections: selected fraction from the same interpolated table
   (closed-form hat cumulatives in Eps, same NuLambda/Ei weights).
 - No nearest-neighbor mode.
-- Use histpy `fill_value` (israelmcmc-ai/histpy#1): Eps with fill_value=0 and
-  extrapolate=True (linear ramp to 0 at the Eps edges, 0 beyond). The current
-  code clamps flat beyond the outer centers and masks outside the edges, so
-  the edge-bin hat integrals and the selected fraction change; derive and
-  test. Keep Zeta without fill (it should wrap). If it works, the maintainer
-  releases histpy and we bump the cosipy requirement.
+- Use histpy `fill_value` (israelmcmc-ai/histpy#1, install from its branch):
+  - Eps: fill_value=0 with extrapolate=True (linear ramp to 0 at the Eps
+    edges, 0 beyond; without extrapolate, values beyond return NaN). The
+    current code clamps flat beyond the outer centers and masks outside the
+    edges, so the edge-bin hat integrals and the selected fraction change;
+    derive and test.
+  - Zeta: fill_value='periodic' (wraps; between the last and first bin
+    centers it interpolates across 2pi), so every Zeta hat integrates to its
+    bin width and the old `% 2pi` wrapping/clamping workaround goes away.
+  - Other axes keep the default clamping unless a test shows otherwise.
+  - If it works, the maintainer releases histpy and we bump the cosipy
+    requirement.
 
 ### PR 2: Lazy loading of the hist IRF
 
@@ -97,6 +103,9 @@ legibility). Supersedes PRs #15, #26, #27, #28 (closed or to be closed).
   `_ensure_loaded` choke point used by every evaluation path, plus a guard
   that no weight falls on an unloaded row. Never touch all rows in `__init__`.
 - Open the file per load (picklable, fork-safe). `preload=True` reads all.
+- histpy#1 also adds partial-sky `HealpixAxis` support (fill_value for
+  uncovered pixels); consider it as an alternative to the full-size array if
+  it turns out simpler.
 
 ### PR 3: Trapz folding with shared nodes and a hierarchical broadening cache
 
