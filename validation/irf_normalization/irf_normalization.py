@@ -136,7 +136,7 @@ def events_on_sub_cells(model, lon, lat, energy, extra_eps=(), nsub=4):
     # Sub-cells that straddle the edge of the physical region (phi + theta in [0, pi])
     # have part of their phase space inside it, so they are kept, with the midpoint
     # moved just inside.
-    phi_geo = np.clip(phi_kin + theta, 1e-9, np.pi - 1e-9)
+    phi_geo = np.clip(phi_kin + theta, 1e-6, np.pi - 1e-6)
     keep = weight > 0
     n = keep.sum()
 
