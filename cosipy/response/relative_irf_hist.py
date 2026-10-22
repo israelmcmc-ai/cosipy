@@ -25,6 +25,7 @@ from scoords import SpacecraftFrame
 
 from cosipy.event_selection.energy_selection import EnergySelector
 from cosipy.polarization import PolarizationAxis
+from cosipy.response.photon_types import PhotonListWithDirectionAndEnergyInSCFrame
 from cosipy.response.relative_coordinates import RelativeCDSCoordinates
 from cosipy.util.iterables import asarray
 
@@ -557,6 +558,31 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
         # Integral over Phi, Theta and Zeta of the normalized density, per Epsilon center
         self._epsilon_marginal[pixel] = cds_marginal * inv_integral[:, None]
         self._loaded[pixel] = True
+
+    def _pixel_table(self, pixel: int) -> np.ndarray:
+        """
+        The normalized table of one ``NuLambda`` pixel, with axes ``Ei``, ``Epsilon``,
+        ``Phi``, ``Theta`` and ``Zeta`` (per unit ``Epsilon``), reading it if needed.
+        """
+
+        if not self._loaded[pixel]:
+            self._load_pixels([pixel])
+
+        return self._event_prob.contents[pixel]
+
+    def _effective_area_at_pixel(self, pixel: int, energy_keV: np.ndarray) -> np.ndarray:
+        """
+        Total effective area before any selection, in cm2, at the center of a
+        ``NuLambda`` pixel and the photon energies ``energy_keV``.
+        """
+
+        lon, lat = self.axes['NuLambda'].pix2ang(int(pixel), lonlat=True)
+        n = len(energy_keV)
+        photons = PhotonListWithDirectionAndEnergyInSCFrame(np.full(n, np.deg2rad(float(lon))),
+                                                            np.full(n, np.deg2rad(float(lat))),
+                                                            np.asarray(energy_keV, dtype=float))
+
+        return np.asarray(self._effective_area_cm2_unselected(photons), dtype=float)
 
     @property
     def axes(self) -> Axes:
