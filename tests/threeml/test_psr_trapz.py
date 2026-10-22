@@ -6,69 +6,95 @@ from astropy.coordinates import SkyCoord
 from astropy.time import Time
 import astropy.units as u
 from astromodels import PointSource, Gaussian, DiracDelta, Powerlaw
-from histpy import Axis, Axes
+from histpy import Axis, Axes, HealpixAxis, Histogram
 from scoords import SpacecraftFrame
-from scipy.integrate import quad
-from scipy.stats import norm
 
+from cosipy.data_io.EmCDSUnbinnedData import EmCDSEventDataInSCFrameFromArrays
+from cosipy.event_selection.energy_selection import EnergySelector
 from cosipy.interfaces.data_interface import TimeTagEmCDSEventDataInSCFrameInterface
+from cosipy.polarization import PolarizationAxis, StereographicConvention
+from cosipy.response.broadened_irf_cache import BroadenedIRFCache
+from cosipy.response.photon_types import PhotonListWithDirectionAndEnergyInSCFrame
+from cosipy.response.relative_irf_hist import IRFRelativeHistUnpolarized
 from cosipy.spacecraftfile import SpacecraftHistory
 from cosipy.threeml.psr_fixed_ei import UnbinnedThreeMLPointSourceResponseTrapz
 
-AEFF = 100.  # cm2
-RES = 0.01  # Fractional energy resolution (sigma)
 LIVETIME = 10.  # s
+LIVETIME_RATIO = 0.8
+LON, LAT = 0.3, 0.6  # source direction in the spacecraft frame, rad
 
 
-class ToyIRF:
-    """
-    Constant effective area, Gaussian energy dispersion, no angular dependence.
-    """
+def make_irf_hist(seed=0):
+    """Random contents in the physical region of Phi + Theta, a photopeak in Epsilon,
+    over 50-2000 keV."""
 
-    def __init__(self, res=RES):
-        self.res = res
+    rng = np.random.default_rng(seed)
+    axes = Axes([
+        HealpixAxis(nside=1, scheme='ring', coordsys=SpacecraftFrame(), label='NuLambda'),
+        Axis(np.geomspace(50, 2000, 12) * u.keV, label='Ei', scale='log'),
+        Axis([-1, -0.5, -0.2, -0.05, -0.01, 0.01, 0.05, 0.2], label='Epsilon'),
+        Axis(np.linspace(0, 180, 7) * u.deg, label='Phi'),
+        Axis(np.linspace(-90, 90, 5) * u.deg, label='Theta'),
+        PolarizationAxis(np.linspace(0, 360, 9) * u.deg, convention=StereographicConvention(), label='Zeta'),
+    ])
+    phi = axes['Phi'].centers.to_value(u.rad)[:, None]
+    theta = axes['Theta'].centers.to_value(u.rad)[None, :]
+    physical = (phi + theta > 0) & (phi + theta < np.pi)
+    contents = rng.random(axes.nbins) * physical[None, None, None, :, :, None]
+    contents[:, :, 4] *= 20  # photopeak
 
-    def effective_area_cm2(self, photons):
-        return np.full(photons.nphotons, AEFF)
+    return Histogram(axes, contents=contents, unit=u.cm * u.cm)
 
-    def event_probability(self, photons, events):
-        ei = np.asarray(photons.energy_keV)
-        em = np.asarray(events.energy_keV)
-        return norm.pdf(em, loc=ei, scale=self.res * ei)
 
-    def differential_effective_area_cm2(self, photons, events):
-        return AEFF * self.event_probability(photons, events)
+@pytest.fixture(scope='module')
+def irf_file(tmp_path_factory):
+    path = tmp_path_factory.mktemp('irf') / 'irf.h5'
+    make_irf_hist().write(path, name='IRF')
+    return path
+
+
+@pytest.fixture(scope='module')
+def cache_file(tmp_path_factory):
+    return tmp_path_factory.mktemp('cache') / 'cache.h5'
+
+
+def make_cache(irf_file, cache_file):
+    """From the IRF without selections, which are applied when the kernels are evaluated."""
+    return BroadenedIRFCache(IRFRelativeHistUnpolarized.from_h5(irf_file), cache_file,
+                             energy_range_keV=(100., 1000.), max_level=4)
 
 
 @pytest.fixture
 def energy_m():
-    return np.array([400., 505., 1000., 1805., 1808., 1812.])
+    return np.array([120., 250., 400., 505., 511., 700., 950.])
 
 
 @pytest.fixture
 def data(energy_m):
     n = energy_m.size
+    rng = np.random.default_rng(3)
     data = MagicMock(spec=TimeTagEmCDSEventDataInSCFrameInterface)
     data.nevents = n
     data.time.utc.unix = 1000. + np.arange(n) / n
     data.energy_keV = energy_m
-    data.scattering_angle_rad = np.full(n, 0.5)
-    data.scattered_lon_rad_sc = np.full(n, 0.1)
-    data.scattered_lat_rad_sc = np.full(n, 0.2)
+    data.scattering_angle_rad = rng.uniform(0.5, 1.5, n)
+    data.scattered_lon_rad_sc = rng.uniform(-np.pi, np.pi, n)
+    data.scattered_lat_rad_sc = rng.uniform(-1, 1, n)
     return data
 
 
 @pytest.fixture
 def sc_history():
     sc = MagicMock(spec=SpacecraftHistory)
-    sc.obstime = Time([1000., 1001.], format='unix')
+    sc.obstime = Time([1000., 1000. + LIVETIME / LIVETIME_RATIO], format='unix')
     sc.nintervals = 1
     sc.livetime = [LIVETIME] * u.s
-    sc.intervals_duration = [LIVETIME] * u.s
+    sc.intervals_duration = [LIVETIME / LIVETIME_RATIO] * u.s
 
     def interp(times):
         interp_sc = MagicMock()
-        interp_sc.get_target_in_sc_frame.return_value = SkyCoord(lon=np.zeros(times.size), lat=np.zeros(times.size),
+        interp_sc.get_target_in_sc_frame.return_value = SkyCoord(lon=np.full(times.size, LON),
+                                                                 lat=np.full(times.size, LAT),
                                                                  unit='rad', frame=SpacecraftFrame())
         interp_sc.get_earth_occ.return_value = np.zeros(times.size, dtype=bool)
         return interp_sc
@@ -77,184 +103,151 @@ def sc_history():
     return sc
 
 
-def make_psr(data, sc_history, res=RES, **kwargs):
-    kwargs.setdefault('energy_nodes', np.geomspace(100, 5000, 200) * u.keV)
-    kwargs.setdefault('epsilon_nodes', np.linspace(-0.1, 0.1, 41))
-    kwargs.setdefault('offset', None)
-    return UnbinnedThreeMLPointSourceResponseTrapz(data, ToyIRF(res), sc_history, **kwargs)
+def brute_force(irf, spectrum, data, emin=100., emax=1000., npoints=4001):
+    """Expected counts and density per event, integrating over the photon energy with the
+    original IRF on a fine grid."""
+
+    energy = np.geomspace(emin, emax, npoints)
+    de = np.gradient(energy)
+    flux = spectrum(energy)
+    n = data.nevents
+
+    aeff = np.asarray(irf.effective_area_cm2(
+        PhotonListWithDirectionAndEnergyInSCFrame(np.full(npoints, LON), np.full(npoints, LAT), energy)))
+    counts = LIVETIME * np.sum(aeff * flux * de)
+
+    events = EmCDSEventDataInSCFrameFromArrays(*(np.repeat(np.asarray(a), npoints)
+                                                 for a in (data.energy_keV, data.scattered_lon_rad_sc,
+                                                           data.scattered_lat_rad_sc, data.scattering_angle_rad)))
+    photons = PhotonListWithDirectionAndEnergyInSCFrame(np.full(n * npoints, LON), np.full(n * npoints, LAT),
+                                                        np.tile(energy, n))
+    diff = np.asarray(irf.differential_effective_area_cm2(photons, events)).reshape(n, npoints)
+    density = LIVETIME_RATIO * diff @ (flux * de)
+
+    return counts, density
 
 
-def expected_density(em, spectrum, emin, emax, eps_min=-0.1, eps_max=0.1, res=RES):
-    # Dispersion is truncated at the Epsilon axis range
-    lo = max(emin, em / (1 + eps_max))
-    hi = min(emax, em / (1 + eps_min))
-    if lo >= hi:
-        return 0
-    return AEFF * quad(lambda e: norm.pdf(em, loc=e, scale=res * e) * spectrum(e), lo, hi,
-                       points=[em] if lo < em < hi else None, limit=200)[0]
-
-
-def test_continuum(data, sc_history, energy_m):
-    spectrum = Powerlaw(K=1e-2, index=-2, piv=100)
+@pytest.mark.parametrize('index', [-2., -2.6])
+@pytest.mark.parametrize('selection', [None, [200., 900.]])
+def test_matches_brute_force(irf_file, cache_file, data, sc_history, index, selection):
+    selections = None if selection is None else EnergySelector(selection * u.keV)
+    irf = IRFRelativeHistUnpolarized.from_h5(irf_file, selections=selections)
+    cache = make_cache(irf_file, cache_file)
+    spectrum = Powerlaw(K=1e-2, index=index, piv=100)
     source = PointSource('src', l=0, b=0, spectral_shape=spectrum)
 
-    psr = make_psr(data, sc_history)
+    cells = UnbinnedThreeMLPointSourceResponseTrapz.cells_for(source, cache, accuracy=1e-3)
+    psr = UnbinnedThreeMLPointSourceResponseTrapz(data, irf, sc_history, cache, cells, offset=None)
     psr.set_source(source)
 
-    nexp = LIVETIME * AEFF * quad(spectrum, 100, 5000)[0]
-    assert psr.expected_counts() == pytest.approx(nexp, rel=1e-3)
+    counts, density = brute_force(irf, spectrum, data)
 
-    density = psr.expectation_density()
-    for em, d in zip(energy_m, density):
-        assert d == pytest.approx(expected_density(em, spectrum, 100, 5000), rel=1e-3)
+    # Events outside the selection would not be in the data
+    inside = np.ones(data.nevents, dtype=bool) if selection is None else \
+        (data.energy_keV >= selection[0]) & (data.energy_keV < selection[1])
+
+    assert psr.expected_counts() == pytest.approx(counts, rel=5e-3)
+    np.testing.assert_allclose(psr.expectation_density()[inside], density[inside], rtol=0.01)
 
 
-def test_broad_dispersion(data, sc_history, energy_m):
-    # Wide Epsilon bins with a steep spectrum. The Epsilon nodes alone are not enough.
-    spectrum = Powerlaw(K=1e-2, index=-3, piv=100)
+def test_weight_like_the_spectrum_is_exact_for_the_counts(irf_file, cache_file, data, sc_history):
+    """With F = w (g constant), the interpolation of g is exact, and with a single
+    level-0 cell the expected counts are the integral of w Aeff."""
+
+    irf = IRFRelativeHistUnpolarized.from_h5(irf_file)
+    cache = make_cache(irf_file, cache_file)
+    source = PointSource('src', l=0, b=0, spectral_shape=Powerlaw(K=1e-2, index=-2, piv=1))
+
+    psr = UnbinnedThreeMLPointSourceResponseTrapz(data, irf, sc_history, cache, [(0, 0)], offset=None)
+    psr.set_source(source)
+
+    counts, _ = brute_force(irf, source.spectrum.main.shape, data, npoints=100_001)
+    assert psr.expected_counts() == pytest.approx(counts, rel=1e-4)
+
+
+def test_nodes_get_the_pieces_of_their_cells(irf_file, cache_file, data, sc_history):
+    """The lower node of a cell gets its L piece, the upper node its R piece."""
+
+    irf = IRFRelativeHistUnpolarized.from_h5(irf_file)
+    cache = make_cache(irf_file, cache_file)
+    cells = [(1, 0), (2, 2), (2, 3)]
+    psr = UnbinnedThreeMLPointSourceResponseTrapz(data, irf, sc_history, cache, cells, offset=None)
+    psr.set_source(PointSource('src', l=0, b=0, spectral_shape=Powerlaw()))
+    psr.init_cache()
+
+    nodes = [100., 10 ** 2.5, 10 ** 2.75, 1000.]
+    np.testing.assert_allclose(psr._nodes_keV, nodes)
+
+    photons = PhotonListWithDirectionAndEnergyInSCFrame(np.array([LON]), np.array([LAT]), np.array([1.]))
+    expected = np.zeros(4)
+    for n, cell in enumerate(cells):
+        irf_r, irf_l = cache.piece_irfs(*cell)
+        photons.energy_keV[:] = nodes[n]
+        expected[n] += LIVETIME * irf_l.effective_area_cm2(photons)[0]
+        expected[n + 1] += LIVETIME * irf_r.effective_area_cm2(photons)[0]
+
+    np.testing.assert_allclose(psr._exposure, expected)
+
+
+def test_lines_with_the_original_irf(irf_file, cache_file, data, sc_history):
+    irf = IRFRelativeHistUnpolarized.from_h5(irf_file)
+    cache = make_cache(irf_file, cache_file)
+    spectrum = DiracDelta(value=1e-3, zero_point=511.)
+    spectrum.zero_point.fix = True
     source = PointSource('src', l=0, b=0, spectral_shape=spectrum)
 
-    psr = make_psr(data, sc_history, res=0.3, epsilon_nodes=np.linspace(-0.9, 0.9, 7),
-                   energy_nodes=np.geomspace(100, 5000, 100) * u.keV)
+    mono_nodes = UnbinnedThreeMLPointSourceResponseTrapz.mono_nodes_of(source)
+    np.testing.assert_allclose(mono_nodes.to_value(u.keV), [511.])
+
+    psr = UnbinnedThreeMLPointSourceResponseTrapz(data, irf, sc_history, cache, [(0, 0)],
+                                                  mono_nodes=mono_nodes, offset=None)
     psr.set_source(source)
 
-    density = psr.expectation_density()
-    for em, d in zip(energy_m, density):
-        assert d == pytest.approx(expected_density(em, spectrum, 100, 5000, -0.9, 0.9, res=0.3), rel=1e-2)
+    photons = PhotonListWithDirectionAndEnergyInSCFrame(np.full(data.nevents, LON), np.full(data.nevents, LAT),
+                                                        np.full(data.nevents, 511.))
+    events = EmCDSEventDataInSCFrameFromArrays(np.asarray(data.energy_keV), np.asarray(data.scattered_lon_rad_sc),
+                                               np.asarray(data.scattered_lat_rad_sc),
+                                               np.asarray(data.scattering_angle_rad))
+    diff = np.asarray(irf.differential_effective_area_cm2(photons, events))
+
+    assert psr.expected_counts() == pytest.approx(LIVETIME * 1e-3 * irf.effective_area_cm2(photons[0]))
+    np.testing.assert_allclose(psr.expectation_density(), LIVETIME_RATIO * 1e-3 * diff)
 
 
-def test_narrow_line(data, sc_history, energy_m):
-    spectrum = Gaussian(F=1e-3, mu=1805., sigma=1.)
-    source = PointSource('src', l=0, b=0, spectral_shape=spectrum)
+def test_free_line_energy_raises():
+    spectrum = DiracDelta(value=1e-3, zero_point=511.)
+    spectrum.zero_point.free = True
 
-    # With a coarse grid the 1 keV wide line falls between nodes
-    psr = make_psr(data, sc_history, energy_nodes=np.linspace(1790, 1830, 3) * u.keV)
-    psr.set_source(source)
-    coarse = psr.expected_counts()
-
-    psr = make_psr(data, sc_history, energy_nodes=np.linspace(1790, 1830, 401) * u.keV)
-    psr.set_source(source)
-
-    nexp = LIVETIME * AEFF * 1e-3
-    assert psr.expected_counts() == pytest.approx(nexp, rel=1e-3)
-    assert abs(coarse - nexp) / nexp > 0.1
-
-    density = psr.expectation_density()
-    for em, d in zip(energy_m, density):
-        assert d == pytest.approx(expected_density(em, spectrum, 1790, 1830), rel=1e-3, abs=1e-12)
-
-
-def test_dirac_delta_line(data, sc_history, energy_m):
-    spectrum = DiracDelta(value=1e-3, zero_point=1808.)
-    source = PointSource('src', l=0, b=0, spectral_shape=spectrum)
-
-    psr = make_psr(data, sc_history, mono_nodes=[1808.] * u.keV)
-    psr.set_source(source)
-
-    assert psr.expected_counts() == pytest.approx(LIVETIME * AEFF * 1e-3)
-
-    density = psr.expectation_density()
-    expected = AEFF * norm.pdf(energy_m, loc=1808., scale=RES * 1808.) * 1e-3
-    expected[np.abs(energy_m / 1808. - 1) > 0.1] = 0
-    np.testing.assert_allclose(density, expected, rtol=1e-10)
-
-
-def test_event_nodes_follow_epsilon(data, sc_history):
-    psr = make_psr(data, sc_history, energy_nodes=np.geomspace(100, 5000, 5) * u.keV)
-
-    nodes, weights = psr._event_nodes(np.array([1000., 5000.]))
-
-    # Nodes cover Em/(1+eps) for eps in [-0.1, 0.1], limited to the energies range
-    nonzero = weights[0] > 0
-    assert nodes[0][nonzero].min() == pytest.approx(1000 / 1.1)
-    assert nodes[0][nonzero].max() == pytest.approx(1000 / 0.9)
-    assert weights[0].sum() == pytest.approx(1000 / 0.9 - 1000 / 1.1)
-
-    assert nodes[1][weights[1] > 0].max() == pytest.approx(5000)
-    assert weights[1].sum() == pytest.approx(5000 - 5000 / 1.1)
-
-
-def fixed(function):
-    for par in function.parameters.values():
-        par.free = False
-    return function
-
-
-def test_integration_nodes_lines_and_epsilon():
-    spectrum = fixed(Powerlaw()) + DiracDelta(value=1e-3, zero_point=511.)
-    source = PointSource('src', l=0, b=0, spectral_shape=spectrum)
-
-    nodes = UnbinnedThreeMLPointSourceResponseTrapz.integration_nodes(source, ToyIRF(), [100, 5000] * u.keV,
-                                                                      epsilon_range=(-0.1, 0.1))
-
-    np.testing.assert_allclose(nodes['mono_nodes'].to_value(u.keV), [511.])
-    assert nodes['energy_nodes'].min() == 100 * u.keV and nodes['energy_nodes'].max() == 5000 * u.keV
-    assert 511 * u.keV not in nodes['energy_nodes']
-
-    # Epsilon nodes span the range and concentrate within the energy resolution
-    eps = nodes['epsilon_nodes']
-    assert eps[0] == -0.1 and eps[-1] == 0.1
-    assert np.sum(np.abs(eps) < 3 * RES) > np.sum(np.abs(eps) > 3 * RES)
-
-    # Without estimation, the IRF's own axis is used
     with pytest.raises(ValueError):
-        UnbinnedThreeMLPointSourceResponseTrapz.integration_nodes(source, ToyIRF(), [100, 5000] * u.keV,
-                                                                  estimate_epsilon=False)
+        UnbinnedThreeMLPointSourceResponseTrapz.mono_nodes_of(spectrum)
 
-    irf = ToyIRF()
-    irf.axes = Axes([Axis(np.linspace(-0.1, 0.1, 41), label='Epsilon')])
-    nodes = UnbinnedThreeMLPointSourceResponseTrapz.integration_nodes(source, irf, [100, 5000] * u.keV,
-                                                                      estimate_epsilon=False)
-    epsilon_axis = irf.axes['Epsilon']
-    np.testing.assert_allclose(nodes['epsilon_nodes'],
-                               np.concatenate([[-0.1], epsilon_axis.centers, [0.1]]))
 
-    spectrum.zero_point_2.free = True
+def test_cells_for(irf_file, cache_file):
+    irf = IRFRelativeHistUnpolarized.from_h5(irf_file)
+    cache = make_cache(irf_file, cache_file)
+
+    # g is constant: no refinement
+    assert UnbinnedThreeMLPointSourceResponseTrapz.cells_for(Powerlaw(index=-2), cache) == [(0, 0)]
+
+    # Steeper: refined uniformly, more for a smaller target
+    steep = Powerlaw(index=-2.5)
+    coarse = UnbinnedThreeMLPointSourceResponseTrapz.cells_for(steep, cache, accuracy=1e-2)
+    fine = UnbinnedThreeMLPointSourceResponseTrapz.cells_for(steep, cache, accuracy=1e-3)
+    assert 1 < len(coarse) < len(fine)
+
+    # A narrow feature is refined around it, down to the finest level
+    line = Gaussian(F=1e-3, mu=400., sigma=10.) + Powerlaw(K=1e-4, index=-2, piv=100)
+    cells = UnbinnedThreeMLPointSourceResponseTrapz.cells_for(line, cache, accuracy=1e-2)
+    finest = [cache.cell_edges_keV(*c) for c in cells if c[0] == cache.max_level]
+    assert finest and all(300 < lo < 500 for lo, _ in finest)
+    assert any(level < cache.max_level for level, _ in cells)
+
+
+def test_cells_must_tile_the_range(irf_file, cache_file, data, sc_history):
+    irf = IRFRelativeHistUnpolarized.from_h5(irf_file)
+    cache = make_cache(irf_file, cache_file)
+
     with pytest.raises(ValueError):
-        UnbinnedThreeMLPointSourceResponseTrapz.integration_nodes(source, ToyIRF(), [100, 5000] * u.keV)
-
-
-def test_integration_nodes_parameter_range():
-    spectrum = Gaussian(F=1e-3, mu=1805., sigma=3.)
-    spectrum.F.free = False
-    spectrum.mu.bounds = (1800, 1820)
-    spectrum.sigma.bounds = (0.5, 3)
-
-    energy_range = [1790, 1830] * u.keV
-    nodes = UnbinnedThreeMLPointSourceResponseTrapz.integration_nodes(spectrum, ToyIRF(), energy_range,
-                                                                      epsilon_range=(-0.1, 0.1))
-
-    # Parameters are restored
-    assert spectrum.mu.value == 1805. and spectrum.sigma.value == 3.
-
-    # A 0.5 keV wide line can be anywhere within [1800, 1820]
-    e = nodes['energy_nodes'].to_value(u.keV)
-    inside = (e >= 1800) & (e <= 1820)
-    assert np.diff(e[inside]).max() < 0.5
-
-    spectrum.mu.free = False
-    spectrum.sigma.free = False
-    nodes_fixed = UnbinnedThreeMLPointSourceResponseTrapz.integration_nodes(spectrum, ToyIRF(), energy_range,
-                                                                            epsilon_range=(-0.1, 0.1))
-    assert nodes_fixed['energy_nodes'].size < e.size / 2
-
-
-@pytest.mark.parametrize("spectrum, energy_range, res, eps_range",
-                         [(fixed(Powerlaw(K=1e-2, index=-3, piv=100)), (100, 5000), 0.3, (-0.9, 0.9)),
-                          (fixed(Gaussian(F=1e-3, mu=1805., sigma=1.)), (1790, 1830), RES, (-0.1, 0.1))])
-def test_integration_nodes_accuracy(data, sc_history, energy_m, spectrum, energy_range, res, eps_range):
-    source = PointSource('src', l=0, b=0, spectral_shape=spectrum)
-
-    nodes = UnbinnedThreeMLPointSourceResponseTrapz.integration_nodes(spectrum, ToyIRF(res), energy_range * u.keV,
-                                                                      accuracy=0.01, epsilon_range=eps_range)
-
-    psr = UnbinnedThreeMLPointSourceResponseTrapz(data, ToyIRF(res), sc_history, offset=None, **nodes)
-    psr.set_source(source)
-
-    nexp = LIVETIME * AEFF * quad(spectrum, *energy_range, points=[1805.], limit=200)[0]
-    assert psr.expected_counts() == pytest.approx(nexp, rel=1e-2)
-
-    density = psr.expectation_density()
-    for em, d in zip(energy_m, density):
-        expected = expected_density(em, spectrum, *energy_range, *eps_range, res=res)
-        assert d == pytest.approx(expected, rel=1e-2, abs=1e-12)
+        UnbinnedThreeMLPointSourceResponseTrapz(data, irf, sc_history, cache, [(1, 0)])
+    with pytest.raises(ValueError):
+        UnbinnedThreeMLPointSourceResponseTrapz(data, irf, sc_history, cache, [(1, 0), (1, 1), (2, 3)])

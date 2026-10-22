@@ -37,7 +37,8 @@ checked when the cache is opened again)::
     BROADENED/                attrs: energy_range_keV, cells_per_decade, weight_index,
                                      energy_degree (1: hats linear in ln E),
                                      direction_degree (1: linear between pixel centers),
-                                     steps_per_cell, quadrature_step, irf_id, version
+                                     steps_per_cell, max_epsilon_step, quadrature_step,
+                                     irf_id, version
         axes/                 Epsilon, Phi, Theta, Zeta axes of the IRF (the floor of the
                               Epsilon' binning and the CDS axes of every piece)
         e{level}/c{index}/point/
@@ -92,7 +93,10 @@ class BroadenedIRFCache:
     steps_per_cell : int
         The ``Epsilon'`` axis of each cell has bins uniform in ``ln(1 + Epsilon')``, of
         width ``ln(b/a) / steps_per_cell``, over the broadened photopeak, plus the
-        edges of the ``Epsilon`` axis of the IRF everywhere.
+        edges of the ``Epsilon`` axis of the IRF everywhere (see :meth:`epsilon_edges`).
+    max_epsilon_step : float
+        Maximum width of those bins. The error of the kernels decreases as the square of
+        the width: with the default, 1/64 of a decade, it is ~0.5%.
     quadrature_step : float, optional
         Step in ``ln E`` of the midpoint rule of the integral over the photon energy. By
         default, a quarter of the narrowest ``Epsilon`` bin of the IRF (in
@@ -107,7 +111,8 @@ class BroadenedIRFCache:
                  energy_range_keV: Tuple[float, float] = (100., 10_000.),
                  cells_per_decade: int = 1,
                  weight_index: float = -2.,
-                 steps_per_cell: int = 8,
+                 steps_per_cell: int = 16,
+                 max_epsilon_step: float = np.log(10) / 64,
                  quadrature_step: float = None,
                  max_level: int = 6):
 
@@ -117,6 +122,7 @@ class BroadenedIRFCache:
         self._cells_per_decade = int(cells_per_decade)
         self._weight_index = float(weight_index)
         self._steps_per_cell = int(steps_per_cell)
+        self._max_epsilon_step = float(max_epsilon_step)
         self._max_level = int(max_level)
 
         ncells0 = (self._log10_range[1] - self._log10_range[0]) * self._cells_per_decade
@@ -138,11 +144,27 @@ class BroadenedIRFCache:
                        'energy_degree': 1,
                        'direction_degree': 1,
                        'steps_per_cell': self._steps_per_cell,
+                       'max_epsilon_step': self._max_epsilon_step,
                        'quadrature_step': self._quadrature_step,
                        'irf_id': self._irf_id(irf),
                        'version': VERSION}
 
         self._open_or_create()
+
+    @property
+    def energy_range_keV(self) -> np.ndarray:
+        """Energy range of the integral over the photon energy, in keV."""
+        return 10 ** self._log10_range
+
+    @property
+    def weight_index(self) -> float:
+        """Index of the weight ``w = (E/keV)^weight_index``."""
+        return self._weight_index
+
+    @property
+    def max_level(self) -> int:
+        """Finest level allowed."""
+        return self._max_level
 
     # Geometry
 
@@ -157,16 +179,19 @@ class BroadenedIRFCache:
         width = 1 / (self._cells_per_decade * 2 ** level)
         return 10 ** (self._log10_range[0] + width * np.array([index, index + 1]))
 
-    def epsilon_edges(self, level: int) -> np.ndarray:
+    def epsilon_edges(self, level: int, index: int) -> np.ndarray:
         """
-        Edges of the ``Epsilon' = Em / a - 1`` axis of the cells of ``level``: those of
-        the IRF's ``Epsilon`` axis, plus a uniform grid in ``ln(1 + Epsilon')`` of
-        ``steps_per_cell`` bins per cell width from one cell width below the photopeak
-        to the highest reachable value, ``ln(b/a) + ln(1 + eps_max)``.
+        Edges of the ``Epsilon' = Em / a - 1`` axis of a cell ``[a, b]``: those of the
+        IRF's ``Epsilon`` axis, plus a uniform grid in ``ln(1 + Epsilon')`` from one cell
+        width below the photopeak to the highest reachable value,
+        ``ln(b/a) + ln(1 + eps_max)``. Its step is ``ln(b/a) / steps_per_cell``, but at
+        most ``max_epsilon_step``: through the photopeak (``Em ~ E``), the kernel follows
+        the variation of the IRF with ``Ei``, whatever the width of the cell.
         """
 
-        width = np.log(10) / (self._cells_per_decade * 2 ** level)
-        step = width / self._steps_per_cell
+        lo, hi = self.cell_edges_keV(level, index)
+        width = np.log(hi / lo)
+        step = min(width / self._steps_per_cell, self._max_epsilon_step)
         u_max = width + np.log1p(self._epsilon_edges[-1])
 
         k = np.arange(np.floor(-width / step), np.ceil(u_max / step) + 1)
@@ -174,7 +199,7 @@ class BroadenedIRFCache:
         edges = np.unique(edges[(edges >= self._epsilon_edges[0]) & (edges <= np.expm1(u_max))])
 
         # Drop edges that only differ by rounding
-        return edges[np.concatenate([[True], np.diff(edges) > 1e-12 * np.maximum(1, np.abs(edges[1:]))])]
+        return edges[np.concatenate([[True], np.diff(edges) > 1e-9 * np.maximum(1, np.abs(edges[1:]))])]
 
     # File
 
@@ -235,7 +260,7 @@ class BroadenedIRFCache:
 
         nulambda = self._irf.axes['NuLambda']
         ei_axis = Axis([lo, hi] * u.keV, label='Ei', scale='log')
-        irf_axes = Axes([nulambda, ei_axis] + self._cds_axes(Axis(self.epsilon_edges(level), label='Epsilon')))
+        irf_axes = Axes([nulambda, ei_axis] + self._cds_axes(Axis(self.epsilon_edges(level, index), label='Epsilon')))
         aeff_axes = Axes([nulambda, ei_axis])
 
         for piece in PIECES:
@@ -357,7 +382,7 @@ class BroadenedIRFCache:
         irf = self._irf
         axes = irf.axes
         lo, hi = self.cell_edges_keV(level, index)
-        eps_edges = self.epsilon_edges(level)
+        eps_edges = self.epsilon_edges(level, index)
 
         width = np.log(hi / lo)
         nq = max(int(np.ceil(width / self._quadrature_step)), 1)
@@ -402,13 +427,13 @@ class BroadenedIRFCache:
         """
 
         lo = self.cell_edges_keV(level, index)[0]
-        parent_edges = self.epsilon_edges(level)
+        parent_edges = self.epsilon_edges(level, index)
         children = []
 
         for child in (2 * index, 2 * index + 1):
             rows = self._read_rows(level + 1, child, pixels)
             child_lo = self.cell_edges_keV(level + 1, child)[0]
-            rebin = self._rebin_matrix(child_lo / lo * (1 + self.epsilon_edges(level + 1)) - 1, parent_edges)
+            rebin = self._rebin_matrix(child_lo / lo * (1 + self.epsilon_edges(level + 1, child)) - 1, parent_edges)
             for piece in PIECES:
                 rows[piece] = np.einsum('mj,pej...->pem...', rebin, rows[piece].astype(float))
             children.append(rows)
