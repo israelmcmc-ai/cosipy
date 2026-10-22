@@ -34,8 +34,10 @@ from astropy.coordinates import CartesianRepresentation, UnitSphericalRepresenta
 from histpy import Axes, Axis, Histogram
 
 import cosipy.polarization  # registers the PolarizationAxis class to open the axes
+from cosipy.data_io.EmCDSUnbinnedData import EmCDSEventDataInSCFrameFromArrays
 from cosipy.event_selection.energy_selection import EnergySelector
 from cosipy.response.relative_coordinates import RelativeCDSCoordinates
+from cosipy.response.photon_types import PhotonListWithDirectionAndEnergyInSCFrame
 from cosipy.response.relative_irf_hist import IRFRelativeHistUnpolarized
 
 # %%
@@ -94,17 +96,12 @@ PreviousIRF = load_previous_version()
 # computes its normalization.
 
 # %%
-class _Photons:
-    def __init__(self, lon, lat, energy):
-        self.direction_lon_rad_sc, self.direction_lat_rad_sc, self.energy_keV = lon, lat, energy
-        self.nphotons = len(lon)
+def photon_list(lon, lat, energy):
+    return PhotonListWithDirectionAndEnergyInSCFrame(lon, lat, energy)
 
 
-class _Events:
-    def __init__(self, lon, lat, phi, energy):
-        self.scattered_lon_rad_sc, self.scattered_lat_rad_sc = lon, lat
-        self.scattering_angle_rad, self.energy_keV = phi, energy
-        self.nevents = len(lon)
+def event_list(lon, lat, phi, energy):
+    return EmCDSEventDataInSCFrameFromArrays(energy, lon, lat, phi)
 
 
 def sub_cells(axes, energy, extra_eps=(), nsub=4):
@@ -144,9 +141,9 @@ def events_on_sub_cells(model, lon, lat, energy, extra_eps=(), nsub=4):
     psichi = UnitSphericalRepresentation.from_cartesian(
         CartesianRepresentation(*RelativeCDSCoordinates.to_cds(relcoords, phi_geo[keep], zeta[keep]), unit=u.one))
 
-    photons = _Photons(np.full(n, lon), np.full(n, lat), np.full(n, energy))
+    photons = photon_list(np.full(n, lon), np.full(n, lat), np.full(n, energy))
     em = energy * (1 + eps[keep])
-    events = _Events(psichi.lon.to_value(u.rad), psichi.lat.to_value(u.rad), phi_kin[keep], em)
+    events = event_list(psichi.lon.to_value(u.rad), psichi.lat.to_value(u.rad), phi_kin[keep], em)
 
     return photons, events, em, weight[keep]
 
@@ -188,7 +185,7 @@ def integrate(model_class):
 
     irf, aeff = load_slice()
     model = model_class(irf, aeff=aeff, copy=False)
-    photons_all = _Photons(photon_lon, photon_lat, photon_energies)
+    photons_all = photon_list(photon_lon, photon_lat, photon_energies)
     unselected = np.asarray(model._effective_area_cm2(photons_all))
 
     integrals = {name: [] for name in cuts}
@@ -266,8 +263,8 @@ def density_at(model, eps, zeta):
     relcoords = RelativeCDSCoordinates(direction.to_cartesian().xyz, model._pol_convention)
     psichi = UnitSphericalRepresentation.from_cartesian(CartesianRepresentation(
         *RelativeCDSCoordinates.to_cds(relcoords, np.full(n, phi + theta), np.broadcast_to(zeta, n)), unit=u.one))
-    photons = _Photons(np.full(n, lon), np.full(n, lat), np.full(n, energy))
-    events = _Events(psichi.lon.to_value(u.rad), psichi.lat.to_value(u.rad), np.full(n, phi),
+    photons = photon_list(np.full(n, lon), np.full(n, lat), np.full(n, energy))
+    events = event_list(psichi.lon.to_value(u.rad), psichi.lat.to_value(u.rad), np.full(n, phi),
                      energy * (1 + np.broadcast_to(eps, n)))
     return np.asarray(model.event_probability(photons, events))
 
