@@ -187,9 +187,25 @@ if it's blocked, say so and validate with synthetic histograms.
   `_FILL_VALUE` holds the per-axis setting; `_Hats` is the matching
   piecewise-linear hat representation (knots = edges + centers) used for all
   the exact integrals, and is tested against `Axis.interp_weights`.
-- `_tot_aeff` is either `irf.project('NuLambda', 'Ei')` or a separate `aeff`
-  histogram (usually finer), always **unselected**. `from_h5` reads an `AEFF`
-  group automatically if present. It is linearly interpolated in `Ei`.
+- **Lazy loading** (`from_h5`, or `__init__` with a filename): each
+  `NuLambda` pixel row is read (`read_direct` into a full-size `np.zeros`
+  array whose pages are only committed when written) and normalized
+  (`_normalize_pixel`) the first time it is needed. Every evaluation calls
+  `_ensure_loaded(photon_dir)` first (the only choke point; it reads the
+  pixels with nonzero `NuLambda` interp weights; no-op once everything is
+  loaded). The file is opened per read, so the model pickles. `preload=True`
+  reads everything up front. A `Histogram` input is normalized in place, pixel
+  by pixel, with the same `_normalize_pixel`. On the real `hist_simple` file
+  (200-5000 keV cut): eager PR 1 load 43 s / 12.2 GB; `preload` 38 s / 9.8 GB;
+  lazy 0.2 s, and 0.77 GB after a 20 deg drift of a source (7 of 768 pixels).
+  With `selections`, only the `Ei` bins that can produce `Em` in the cut are
+  read (plus one bin each side, so interpolation is unchanged). The real
+  files have `Epsilon` down to -1, so this only drops low-`Ei` bins (none for
+  a 200 keV lower cut).
+- `_tot_aeff` is either `irf.project('NuLambda', 'Ei')` (filled per pixel as
+  pixels load) or a separate `aeff` histogram (usually finer, loaded whole),
+  always **unselected**. `from_h5` reads an `AEFF` group automatically if
+  present. It is linearly interpolated in `Ei`.
   `_differential_effective_area_cm2` = unselected area × event probability.
 - The tutorial is
   `docs/tutorials/spectral_fits/continuum_fit/grb/example_grb_fit_relative_hist_response.ipynb`

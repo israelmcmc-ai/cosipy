@@ -16,12 +16,12 @@ from cosipy.response.relative_coordinates import RelativeCDSCoordinates
 from cosipy.response.relative_irf_hist import IRFRelativeHistUnpolarized, _Hats
 
 
-def _make_irf_hist(nside=2, seed=0, eps_edges=np.linspace(-0.5, 0.5, 5)):
+def _make_irf_hist(nside=2, seed=0, eps_edges=np.linspace(-0.5, 0.5, 5), ei_edges=np.geomspace(100, 1000, 4)):
     rng = np.random.default_rng(seed)
 
     axes = Axes([
         HealpixAxis(nside=nside, scheme='ring', coordsys=SpacecraftFrame(), label='NuLambda'),
-        Axis(np.geomspace(100, 1000, 4) * u.keV, label='Ei', scale='log'),
+        Axis(ei_edges * u.keV, label='Ei', scale='log'),
         Axis(eps_edges, label='Epsilon'),
         Axis(np.linspace(0, 180, 7) * u.deg, label='Phi'),
         Axis(np.linspace(-90, 90, 5) * u.deg, label='Theta'),
@@ -916,3 +916,134 @@ class TestZetaPeriodic:
 
         assert prob[1] != pytest.approx(prob[2])
         assert prob[0] == pytest.approx(0.5 * (prob[1] + prob[2]), rel=1e-4)
+
+
+class TestLazyLoading:
+    """From a file, each NuLambda pixel is read and normalized when first needed,
+    and the results are the same as normalizing the whole histogram in memory."""
+
+    @staticmethod
+    def _write(path, with_aeff=False, **kwargs):
+        _make_irf_hist(**kwargs).write(path, name='IRF')
+        if with_aeff:
+            _make_aeff_hist().write(path, name='AEFF')
+
+    @staticmethod
+    def _evaluate(model, photons, events):
+        return (np.asarray(model._effective_area_cm2(photons)),
+                np.asarray(model._event_probability(photons, events)),
+                np.asarray(model._differential_effective_area_cm2(photons, events)))
+
+    @pytest.mark.parametrize('with_aeff', [False, True])
+    @pytest.mark.parametrize('selections', [None, EnergySelector(u.Quantity([150., 400.], u.keV))])
+    def test_matches_the_histogram_in_memory(self, tmp_path, with_aeff, selections):
+        path = tmp_path / 'irf.h5'
+        self._write(path, with_aeff)
+        photons, events = _make_photons_and_events(200)
+
+        lazy = IRFRelativeHistUnpolarized.from_h5(path, selections=selections)
+        aeff = Histogram.open(path, 'AEFF') if with_aeff else None
+        eager = IRFRelativeHistUnpolarized(Histogram.open(path, 'IRF'), aeff=aeff, selections=selections)
+
+        for x, y in zip(self._evaluate(lazy, photons, events), self._evaluate(eager, photons, events)):
+            np.testing.assert_allclose(x, y, rtol=1e-12, atol=1e-300)
+
+    def test_loads_only_the_pixels_around_the_photons(self, tmp_path):
+        path = tmp_path / 'irf.h5'
+        self._write(path)
+        model = IRFRelativeHistUnpolarized.from_h5(path)
+
+        assert not model._loaded.any()
+        assert np.all(model._event_prob.contents == 0)
+
+        photons, events = _make_photons_and_events(1)
+        model._event_probability(photons, events)
+
+        pixels, weights = model.axes['NuLambda'].interp_weights(_direction(photons.direction_lon_rad_sc,
+                                                                           photons.direction_lat_rad_sc))
+        expected = np.unique(np.asarray(pixels)[np.asarray(weights) != 0])
+        np.testing.assert_array_equal(np.flatnonzero(model._loaded), expected)
+        assert np.all(model._event_prob.contents[~model._loaded] == 0)
+
+    @pytest.mark.parametrize('evaluate', ['effective_area', 'selected_fraction', 'event_probability'])
+    def test_every_evaluation_loads_what_it_needs(self, tmp_path, evaluate):
+        """Each path is evaluated first on a fresh model, so it must load the pixels itself."""
+
+        path = tmp_path / 'irf.h5'
+        self._write(path)
+        selections = EnergySelector(u.Quantity([150., 400.], u.keV))
+        photons, events = _make_photons_and_events(50)
+
+        lazy = IRFRelativeHistUnpolarized.from_h5(path, selections=selections)
+        eager = IRFRelativeHistUnpolarized(Histogram.open(path, 'IRF'), selections=selections)
+
+        def run(model):
+            if evaluate == 'effective_area':
+                return model._effective_area_cm2_unselected(photons)
+            if evaluate == 'selected_fraction':
+                return model._selected_fraction(photons)
+            return model._interp_event_prob(photons, events)
+
+        np.testing.assert_allclose(run(lazy), run(eager), rtol=1e-12, atol=1e-300)
+
+    def test_preload_loads_everything(self, tmp_path):
+        path = tmp_path / 'irf.h5'
+        self._write(path)
+
+        model = IRFRelativeHistUnpolarized.from_h5(path, preload=True)
+        eager = IRFRelativeHistUnpolarized(Histogram.open(path, 'IRF'))
+
+        assert model._loaded.all()
+        np.testing.assert_allclose(model._event_prob.contents, eager._event_prob.contents, rtol=1e-12)
+        np.testing.assert_allclose(model._tot_aeff.contents, eager._tot_aeff.contents, rtol=1e-12)
+
+    def test_selections_load_only_the_needed_ei_bins(self, tmp_path):
+        """Ei bins [100, 1000] keV in 9; Epsilon [-0.5, 0.5]. A 500-600 keV cut needs
+        Ei in [333, 1200] keV, i.e. the bins from 278 keV, plus one more below."""
+
+        path = tmp_path / 'irf.h5'
+        ei_edges = np.geomspace(100, 1000, 10)
+        self._write(path, ei_edges=ei_edges)
+        selections = EnergySelector(u.Quantity([500., 600.], u.keV))
+
+        model = IRFRelativeHistUnpolarized.from_h5(path, selections=selections)
+        eager = IRFRelativeHistUnpolarized(Histogram.open(path, 'IRF'), selections=selections)
+
+        needed = np.flatnonzero((ei_edges[1:] > 500 / 1.5) & (ei_edges[:-1] < 600 / 0.5))
+        np.testing.assert_allclose(model.axes['Ei'].edges, ei_edges[needed[0] - 1:])
+
+        # Photons that can produce events in the cut, between all the Ei centers
+        rng = np.random.default_rng(0)
+        n = 300
+        photons = _FakePhotonList(rng.uniform(-np.pi, np.pi, n), rng.uniform(-1.5, 1.5, n),
+                                  rng.uniform(500 / 1.5, 1000, n))
+        events = _FakeEventData(rng.uniform(-np.pi, np.pi, n), rng.uniform(-1.5, 1.5, n), rng.uniform(0, np.pi, n),
+                                rng.uniform(500, 600, n))
+
+        for x, y in zip(self._evaluate(model, photons, events), self._evaluate(eager, photons, events)):
+            assert (y > 0).any()
+            np.testing.assert_allclose(x, y, rtol=1e-12, atol=1e-300)
+
+        # Below the needed range, both give zero selected area
+        low = _FakePhotonList(np.array([0.3]), np.array([0.2]), np.array([150.]))
+        assert model._effective_area_cm2(low)[0] == 0 == eager._effective_area_cm2(low)[0]
+
+    def test_selection_beyond_all_bins_raises(self, tmp_path):
+        path = tmp_path / 'irf.h5'
+        self._write(path)
+
+        with pytest.raises(ValueError):
+            IRFRelativeHistUnpolarized.from_h5(path, selections=EnergySelector(u.Quantity([1e5, 2e5], u.keV)))
+
+    def test_pickles_without_an_open_file(self, tmp_path):
+        import pickle
+
+        path = tmp_path / 'irf.h5'
+        self._write(path)
+        photons, events = _make_photons_and_events(20)
+
+        model = IRFRelativeHistUnpolarized.from_h5(path)
+        copy = pickle.loads(pickle.dumps(model))
+
+        np.testing.assert_allclose(copy._event_probability(photons, events),
+                                   model._event_probability(photons, events), rtol=1e-12)

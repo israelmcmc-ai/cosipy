@@ -1,5 +1,6 @@
 import functools
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 from typing import Iterable, Tuple, Union
 
 import numpy as np
@@ -178,9 +179,17 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
 
     Parameters
     ----------
-    irf : histpy.Histogram
+    irf : histpy.Histogram, str or path-like
         A 6D histogram with the axes described above and contents in
-        units equivalent to area (``cm^2``).
+        units equivalent to area (``cm^2``), or an HDF5 file with that
+        histogram in the group ``group`` (default ``'IRF'``), in the dense
+        format. From a file, each ``NuLambda`` pixel is read and normalized
+        the first time an evaluation needs it (unless ``preload``), so only
+        the pixels around the photon directions take memory. The file is
+        opened for each read. With ``selections``, only the ``Ei`` bins that
+        can produce a measured energy inside them are read (see
+        :meth:`_open_h5_axes`); photons outside those bins get zero area and
+        probability, which is what the selection gives them anyway.
     aeff : histpy.Histogram, optional
         A separate 2D histogram, with axes ``['NuLambda', 'Ei']`` and
         contents in units equivalent to area (``cm^2``), used as the
@@ -237,6 +246,13 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
         if it falls in any of them. For AND semantics, pass a single
         pre-intersected ``EnergySelector`` (e.g. ``sel1.intersect(sel2)``)
         instead of a tuple. Defaults to ``None`` (no cut).
+    preload : bool, optional
+        Only when ``irf`` is a file: read and normalize all the pixels on
+        construction instead of on demand, e.g. when most of the sky will be
+        evaluated anyway. Defaults to False.
+    group : str, optional
+        Only when ``irf`` is a file: the HDF5 group with the histogram.
+        Defaults to ``'IRF'``.
     """
 
     event_data_type = EmCDSEventDataInSCFrameInterface
@@ -248,27 +264,31 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
     _FILL_VALUE = [None, None, 0, None, None, 'periodic']
 
     def __init__(self,
-                 irf: Histogram,
+                 irf: Union[Histogram, str, Path],
                  aeff: Histogram = None,
                  copy = True,
                  nthreads = 1,
                  npoints_parallel_thresh = 1000,
-                 selections: Union[EventSelectorInterface, Tuple[EventSelectorInterface, ...]] = None):
+                 selections: Union[EventSelectorInterface, Tuple[EventSelectorInterface, ...]] = None,
+                 preload: bool = False,
+                 group: str = 'IRF'):
         """
         Validate the input histogram(s), standardize their axis units,
-        and pre-compute the total effective area and the normalized event
+        and set up the total effective area and the normalized event
         probability used at evaluation time.
 
         See the class docstring for a description of the expected axes
         and units.
 
-        ``irf`` is normalized in place (it is the ``_event_prob`` attribute
-        afterwards), without full-size temporary arrays.
+        A ``Histogram`` is normalized in place, one ``NuLambda`` pixel at a
+        time, without full-size temporary arrays. From an HDF5 file, each
+        pixel is read and normalized the same way the first time it is needed
+        (or all of them here, with ``preload``).
 
         Parameters
         ----------
-        irf : histpy.Histogram
-            Input response histogram.
+        irf : histpy.Histogram, str or path-like
+            Input response histogram, or the HDF5 file that holds it.
         aeff : histpy.Histogram, optional
             Optional separate total effective area histogram. See the
             class docstring.
@@ -282,6 +302,10 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
             class docstring.
         selections : cosipy.event_selection.EnergySelector or tuple thereof, optional
             Measured-energy cut(s). See the class docstring.
+        preload : bool, optional
+            Only for an HDF5 file. See the class docstring.
+        group : str, optional
+            Only for an HDF5 file: the group that holds the histogram.
 
         Raises
         ------
@@ -291,14 +315,78 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
             axis has an unexpected type or units.
         """
 
-        if copy:
-            irf = irf.copy()
+        combined_selector = self._combine_selections(selections)
 
-        # Checks
-        if not irf.unit.is_equivalent('cm^2'):
+        if isinstance(irf, Histogram):
+            if copy:
+                irf = irf.copy()
+            axes, unit = irf.axes, irf.unit
+            self._source = None
+        else:
+            axes, unit, ei_bins = self._open_h5_axes(irf, group, combined_selector)
+            self._source = (irf, group, ei_bins)
+
+        self._standardize_axes(axes, unit)
+
+        # Get the total effective area. Projected from irf, it is filled per pixel when loaded.
+        if aeff is not None:
+            self._tot_aeff = self._standardize_aeff(aeff, copy) # cm^2
+        else:
+            self._tot_aeff = Histogram(Axes([axes['NuLambda'], axes['Ei']]))
+
+        self._aeff_from_irf = aeff is None
+
+        self._epsilon_hats = _Hats(axes['Epsilon'], 'zero')
+
+        # Phase space of the (Phi, Theta, Zeta) bins
+        phi_edges_mesh, arm_edges_mesh, az_edges_mesh = np.meshgrid(axes['Phi'].edges,
+                                                                    axes['Theta'].edges,
+                                                                    axes['Zeta'].edges, indexing='ij')
+
+        self._phase_space_cds = RelativeCDSCoordinates.get_relative_cds_phase_space(phi_edges_mesh[:-1, :-1, :-1],
+                                                                                    phi_edges_mesh[1:, :-1, :-1],
+                                                                                    arm_edges_mesh[:-1, :-1, :-1],
+                                                                                    arm_edges_mesh[:-1, 1:, :-1],
+                                                                                    az_edges_mesh[:-1, :-1, :-1],
+                                                                                    az_edges_mesh[:-1, :-1, 1:])
+
+        self._cds_weights = self._cds_marginal_weights(axes)
+
+        npix = axes['NuLambda'].nbins
+        self._epsilon_marginal = np.zeros((npix, axes['Ei'].nbins, axes['Epsilon'].nbins))
+        self._loaded = np.zeros(npix, dtype=bool)
+
+        if self._source is None:
+            # In place, so _event_prob shares the contents with the input
+            irf = irf.to(u.cm * u.cm, copy=False).to(None, copy=False, update=False)
+            self._event_prob = irf
+
+            for pixel in range(npix):
+                self._normalize_pixel(pixel, irf.contents[pixel])
+        else:
+            # The pages are only committed to memory as pixels are loaded
+            self._area_unit_factor = unit.to(u.cm * u.cm)
+            self._event_prob = Histogram(axes, contents=np.zeros(axes.nbins), copy_contents=False)
+
+            if preload:
+                self._load_pixels(range(npix))
+
+        self._selection_ranges = (None if combined_selector is None
+                                  else np.asarray(combined_selector.energy_ranges_keV, dtype=float))
+
+        # Extra params
+        self._nthreads = nthreads
+        self._npoints_parallel_thresh = npoints_parallel_thresh
+        self._executor = ThreadPoolExecutor(max_workers=nthreads) if nthreads > 1 else None
+
+    def _standardize_axes(self, axes: Axes, unit):
+        """
+        Validate the axes and contents unit of the response, and standardize the
+        axes in place: energies in keV, angles in rad, without units.
+        """
+
+        if unit is None or not unit.is_equivalent('cm^2'):
             raise ValueError("IRF contents are expected to have units of area.")
-
-        axes = irf.axes
 
         if not np.array_equal(axes.labels, ['NuLambda', 'Ei', 'Epsilon', 'Phi', 'Theta', 'Zeta']):
             raise ValueError("IRF axes label must be ['NuLambda', 'Ei', 'Epsilon', 'Phi', 'Theta', 'Zeta']")
@@ -335,7 +423,6 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
             if axes[label].axis_scale != 'linear':
                 raise ValueError(f"IRF {label} axis is expected to have a linear scale")
 
-        # Standardize units
         axes['Ei'] = axes['Ei'].to(u.keV, copy = False).to(None, update = False, copy = False)
         axes['Epsilon'] = axes['Epsilon'].to(None, update = False, copy = False)
         axes['Phi'] = axes['Phi'].to(u.rad, copy = False).to(None, update = False, copy = False)
@@ -343,32 +430,112 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
         self._pol_convention = axes['Zeta'].convention
         axes['Zeta'] = Axis(axes['Zeta'].edges.angle.to(u.rad).value, label = 'Zeta')
 
-        irf = irf.to(u.cm * u.cm, copy=False).to(None, copy=False, update=False) # To cm2 and remove units
+    @staticmethod
+    def _open_h5_axes(filename, group: str, selector: Union[EnergySelector, None]):
+        """
+        Axes and unit of the histogram in ``group`` of an HDF5 file, and the
+        slice of ``Ei`` bins to load.
 
-        # Get the total effective area
-        if aeff is not None:
-            self._tot_aeff = self._standardize_aeff(aeff, copy) # cm^2
-        else:
-            self._tot_aeff = irf.project('NuLambda','Ei') # cm^2
+        With a ``selector``, only the ``Ei`` bins that can produce a measured
+        energy inside it are needed: a bin ``[a, b)`` produces ``Em`` between
+        ``a (1 + eps_min)`` and ``b (1 + eps_max)``, with ``eps_min``/``eps_max``
+        the edges of the ``Epsilon`` axis. One more bin is kept on each side,
+        so that the photons in the needed range are interpolated as with the
+        full axis.
 
-        combined_selector = self._combine_selections(selections)
+        Raises
+        ------
+        ValueError
+            If the histogram is not in the dense format without overflow bins.
+        """
 
-        self._epsilon_hats = _Hats(axes['Epsilon'], 'zero')
+        with h5.File(filename, 'r') as f:
+            g = f[group]
 
-        # Density per unit Epsilon: 1/sr/rad. The divisions are in place, since the contents are large.
-        phi_edges_mesh, arm_edges_mesh, az_edges_mesh = np.meshgrid(axes['Phi'].edges,
-                                                                    axes['Theta'].edges,
-                                                                    axes['Zeta'].edges, indexing='ij')
+            if g.attrs.get('format', 'dense') != 'dense':
+                raise ValueError(f"Only the dense histogram format can be loaded from a file, "
+                                 f"got '{g.attrs['format']}' in '{group}'")
 
-        phase_space_cds = RelativeCDSCoordinates.get_relative_cds_phase_space(phi_edges_mesh[:-1, :-1, :-1],
-                                                                              phi_edges_mesh[1:, :-1, :-1],
-                                                                              arm_edges_mesh[:-1, :-1, :-1],
-                                                                              arm_edges_mesh[:-1, 1:, :-1],
-                                                                              az_edges_mesh[:-1, :-1, :-1],
-                                                                              az_edges_mesh[:-1, :-1, 1:])
+            axes = Axes.open(g['axes'])
 
-        irf /= axes.expand_dims(phase_space_cds, axes.label_to_index(['Phi', 'Theta', 'Zeta']))
-        irf /= axes.expand_dims(axes['Epsilon'].widths, axes.label_to_index('Epsilon'))
+            if g['contents'].shape != tuple(axes.nbins):
+                raise ValueError(f"Histograms with overflow bins can't be loaded from a file ('{group}')")
+
+            unit = u.Unit(g.attrs['unit']) if 'unit' in g.attrs else None
+
+        ei_axis = axes['Ei']
+        ei_bins = slice(0, ei_axis.nbins)
+
+        if selector is not None:
+            ranges = selector.energy_ranges_keV
+            eps_min, eps_max = u.Quantity(axes['Epsilon'].edges[[0, -1]]).to_value('')
+            ei_min = ranges[:, 0].min() / (1 + eps_max)
+            ei_max = ranges[:, 1].max() / (1 + eps_min) if eps_min > -1 else np.inf
+
+            ei_edges = ei_axis.edges.to_value(u.keV)
+            needed = np.flatnonzero((ei_edges[1:] > ei_min) & (ei_edges[:-1] < ei_max))
+
+            if len(needed) == 0:
+                raise ValueError(f"No Ei bin of '{group}' can produce events in the selection")
+
+            ei_bins = slice(max(needed[0] - 1, 0), min(needed[-1] + 2, ei_axis.nbins))
+
+            axes = Axes([Axis(ei_axis.edges[ei_bins.start:ei_bins.stop + 1], label='Ei', scale=ei_axis.axis_scale)
+                         if axis.label == 'Ei' else axis
+                         for axis in axes])
+
+        return axes, unit, ei_bins
+
+    def _load_pixels(self, pixels):
+        """
+        Read the contents of the ``NuLambda`` ``pixels`` from the file, directly
+        into ``_event_prob``, and normalize them. The file is opened for each call.
+        """
+
+        filename, group, ei_bins = self._source
+
+        with h5.File(filename, 'r') as f:
+            dataset = f[group]['contents']
+
+            for pixel in pixels:
+                contents = self._event_prob.contents[pixel]
+                dataset.read_direct(contents, np.s_[pixel, ei_bins])
+                contents *= self._area_unit_factor
+                self._normalize_pixel(pixel, contents)
+
+    def _ensure_loaded(self, photon_dir):
+        """
+        Load the ``NuLambda`` pixels that the interpolation at ``photon_dir`` uses.
+        Every evaluation goes through here before reading ``_event_prob``,
+        ``_epsilon_marginal`` or a ``_tot_aeff`` projected from the response.
+        """
+
+        if self._loaded.all():
+            return
+
+        pixels, weights = self._event_prob.axes['NuLambda'].interp_weights(photon_dir)
+        pixels = np.unique(np.asarray(pixels)[np.asarray(weights) != 0])
+        missing = pixels[~self._loaded[pixels]]
+
+        if len(missing):
+            self._load_pixels(missing)
+
+    def _normalize_pixel(self, pixel: int, contents: np.ndarray):
+        """
+        Turn the contents of one ``NuLambda`` pixel (cm^2 per bin, axes ``Ei``,
+        ``Epsilon``, ``Phi``, ``Theta``, ``Zeta``) into the normalized event
+        probability, in place, and fill the per-pixel tables.
+
+        The contents are divided by the phase space of each bin and normalized
+        per ``Ei`` by the integral of the interpolant (see :meth:`_cds_marginal_weights`).
+        With non-uniform bins or near the edges, that is not the sum of the contents.
+        """
+
+        if self._aeff_from_irf:
+            self._tot_aeff.contents[pixel] = contents.sum(axis=(1, 2, 3, 4))
+
+        contents /= self._phase_space_cds
+        contents /= self._event_prob.axes['Epsilon'].widths[:, None, None, None]
 
         # Bins in the unphysical region of the CDS reparametrization (Phi +
         # Theta outside [0, pi]) have zero phase space, so the divisions
@@ -379,28 +546,17 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
         # don't poison interpolation for nearby physical events. Note that
         # the default posinf/neginf of nan_to_num would instead turn inf
         # into the largest finite float, which overflows to inf/NaN when
-        # interpolating. This is done in place with a single mask, since
-        # nan_to_num would also allocate copies of the (large) contents.
-        irf.contents[~np.isfinite(irf.contents)] = 0
+        # interpolating.
+        contents[~np.isfinite(contents)] = 0
 
-        # Normalize by the integral of the interpolant, which is not the sum of
-        # the contents when the bins are not uniform or near the edges
-        cds_marginal = self._cds_marginal(irf)
+        cds_marginal = np.einsum('eijkl,jkl->ei', contents, self._cds_weights)
         integral = cds_marginal @ self._epsilon_hats.integrals()
         inv_integral = np.divide(1., integral, out=np.zeros_like(integral), where=integral > 0)
-        np.multiply(irf.contents, inv_integral[:, :, None, None, None, None], out=irf.contents)
+        contents *= inv_integral[:, None, None, None, None]
 
         # Integral over Phi, Theta and Zeta of the normalized density, per Epsilon center
-        self._epsilon_marginal = cds_marginal * inv_integral[:, :, None]
-
-        self._event_prob = irf
-        self._selection_ranges = (None if combined_selector is None
-                                  else np.asarray(combined_selector.energy_ranges_keV, dtype=float))
-
-        # Extra params
-        self._nthreads = nthreads
-        self._npoints_parallel_thresh = npoints_parallel_thresh
-        self._executor = ThreadPoolExecutor(max_workers=nthreads) if nthreads > 1 else None
+        self._epsilon_marginal[pixel] = cds_marginal * inv_integral[:, None]
+        self._loaded[pixel] = True
 
     @property
     def axes(self) -> Axes:
@@ -412,11 +568,12 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
         return self._event_prob.axes
 
     @staticmethod
-    def _cds_marginal(density: Histogram) -> np.ndarray:
+    def _cds_marginal_weights(axes: Axes) -> np.ndarray:
         """
-        Integral over ``Phi``, ``Theta`` and ``Zeta`` of the ``density`` as
-        evaluated by ``interp()``, weighted by the true phase space
-        ``sin(phi + theta) dphi dtheta dzeta``, per (``NuLambda``, ``Ei``) and
+        Weights to integrate the density over ``Phi``, ``Theta`` and ``Zeta``,
+        as evaluated by ``interp()``, with the true phase space
+        ``sin(phi + theta) dphi dtheta dzeta``. Contracting them with the
+        density per (``Phi``, ``Theta``, ``Zeta``) center gives the integral per
         ``Epsilon`` center.
 
         The interpolant is a sum of products of 1D hat functions, so the
@@ -430,15 +587,14 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
 
         Parameters
         ----------
-        density : histpy.Histogram
-            Density with axes ``NuLambda, Ei, Epsilon, Phi, Theta, Zeta``.
+        axes : histpy.Axes
+            Standardized axes ``NuLambda, Ei, Epsilon, Phi, Theta, Zeta``.
 
         Returns
         -------
-        numpy.ndarray, shape (nNuLambda, nEi, nEpsilon)
+        numpy.ndarray, shape (nPhi, nTheta, nZeta)
         """
 
-        axes = density.axes
         nsub = IRFRelativeHistUnpolarized._CDS_SUBDIVISIONS
 
         def sub_bins(axis):
@@ -459,9 +615,8 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
         phase_space = np.nan_to_num(np.asarray(phase_space, dtype=float))
 
         zeta_integrals = _Hats(axes['Zeta'], 'periodic').integrals()
-        weights = np.einsum('ab,aj,bk->jk', phase_space, phi_hats, theta_hats)[:, :, None] * zeta_integrals
 
-        return np.array([np.einsum('eijkl,jkl->ei', d, weights) for d in density.contents])
+        return np.einsum('ab,aj,bk->jk', phase_space, phi_hats, theta_hats)[:, :, None] * zeta_integrals
 
     def _selected_fraction(self, photons: PhotonListWithDirectionAndEnergyInSCFrameInterface) -> np.ndarray:
         """
@@ -478,6 +633,7 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
                                                  lat=Quantity(photon_lat_rad, 'rad', copy=False))
 
         axes = self._event_prob.axes
+        self._ensure_loaded(photon_dir)
         pix, wpix = axes['NuLambda'].interp_weights(photon_dir)
         ei_bins, wei = axes['Ei'].interp_weights(energy_keV)
 
@@ -630,7 +786,8 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
         """
         Construct an :class:`IRFRelativeHistUnpolarized` from an HDF5
         file that stores the response histogram under the group
-        ``"IRF"``.
+        ``"IRF"``. The response is read on demand, one ``NuLambda`` pixel at
+        a time, unless ``preload=True`` is passed (see the class docstring).
 
         If the file also has a group named ``"AEFF"``, it is read as
         well and passed to :meth:`__init__` as the ``aeff`` argument
@@ -648,9 +805,9 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
         *args, **kwargs
             Extra arguments forwarded verbatim to
             :meth:`__init__` (e.g. ``aeff``, ``copy``, ``nthreads``,
-            ``npoints_parallel_thresh`` or ``selections``). ``copy``
-            defaults to False here, since the histograms are read from
-            disk and nobody else holds them.
+            ``npoints_parallel_thresh``, ``selections`` or ``preload``).
+            ``copy`` defaults to False here, since the histograms are read
+            from disk and nobody else holds them.
 
         Returns
         -------
@@ -667,7 +824,7 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
         if len(args) < 2:
             kwargs.setdefault('copy', False)
 
-        return cls(Histogram.open(filename, "IRF"), *args, **kwargs)
+        return cls(filename, *args, **kwargs)
 
     def _effective_area_cm2(self, photons: PhotonListWithDirectionAndEnergyInSCFrameInterface) -> Iterable[float]:
         """
@@ -706,6 +863,10 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
         """
 
         photon_lon_rad, photon_lat_rad, photon_energy_keV = self._photon_list_to_raw_values(photons)
+
+        if self._aeff_from_irf:
+            self._ensure_loaded(UnitSphericalRepresentation(lon=Quantity(photon_lon_rad, 'rad', copy=False),
+                                                            lat=Quantity(photon_lat_rad, 'rad', copy=False)))
 
         def build_args(lon_rad, lat_rad, energy_keV):
             photon_dir = UnitSphericalRepresentation(lon=Quantity(lon_rad, 'rad', copy=False),
@@ -810,6 +971,8 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
 
         # Convert to relative coordinates
         epsilon = (measured_energy_keV - photon_energy_keV)/photon_energy_keV
+
+        self._ensure_loaded(photon_dir)
 
         relcoords = RelativeCDSCoordinates(photon_dir.to_cartesian().xyz, pol_convention=self._pol_convention)
         phi_geo, zeta = relcoords.to_relative(psichi_dir.to_cartesian().xyz)
