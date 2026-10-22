@@ -133,8 +133,11 @@ def events_on_sub_cells(model, lon, lat, energy, extra_eps=(), nsub=4):
 
     mids, weight = sub_cells(model.axes, energy, extra_eps, nsub)
     eps, phi_kin, theta, zeta = np.meshgrid(*mids, indexing='ij')
-    phi_geo = phi_kin + theta
-    keep = (weight > 0) & (phi_geo > 0) & (phi_geo < np.pi)
+    # Sub-cells that straddle the edge of the physical region (phi + theta in [0, pi])
+    # have part of their phase space inside it, so they are kept, with the midpoint
+    # moved just inside.
+    phi_geo = np.clip(phi_kin + theta, 1e-9, np.pi - 1e-9)
+    keep = weight > 0
     n = keep.sum()
 
     direction = UnitSphericalRepresentation(lon=[lon] * u.rad, lat=[lat] * u.rad)
@@ -240,6 +243,8 @@ c_current = integrate(IRFRelativeHistUnpolarized)
 print(f"{'cut':20s} {'photon':>7s} {'previous':>10s} {'current':>10s}")
 for name in cuts:
     for e, cp, cc in zip(photon_energies, c_previous[name], c_current[name]):
+        if np.isnan(cc):
+            continue  # the photon can't produce Em in the selection
         print(f'{name:20s} {e:7.0f} {cp - 1:+10.4f} {cc - 1:+10.4f}')
 
 # %%
@@ -256,7 +261,7 @@ fig.tight_layout()
 
 # %% [markdown]
 # The current version is normalized to the precision of the numerical integration
-# (~1e-3, from the midpoint rule in `Phi`/`Theta`), for every cut, including the narrow
+# (a few 1e-4, from the midpoint rule in the `Phi`/`Theta` sub-bins), for every cut, including the narrow
 # 511 keV window. The previous one is off by several percent, which the background would
 # amplify about 10 times in the Crab fits.
 #
