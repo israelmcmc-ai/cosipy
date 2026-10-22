@@ -245,6 +245,39 @@ if it's blocked, say so and validate with synthetic histograms.
   every `Ei` can't catch `Ei`-interpolation problems. Use shapes that vary
   with `Ei`, and photons between `Ei` and `NuLambda` centers.
 
+## Point-source folding (`cosipy/threeml/psr_fixed_ei.py`, `cosipy/response/broadened_irf_cache.py`)
+
+- `UnbinnedThreeMLPointSourceResponseTrapz(data, irf, sc_history, cache, cells,
+  mono_nodes=None)`: `F = w g` with `w = E^weight_index` (cache attr, default
+  -2) and `g` linear in ln E between nodes = cell edges. Density and `S` use the
+  same nodes and the interval-midpoint attitude (events use the midpoint of
+  their interval too). A dense-Ei folding with event-time attitude for the
+  density and midpoint for `S` had c = 1.006, enough to bias a background fit.
+- `BroadenedIRFCache`: cells in log10 E (level 0 = `cells_per_decade` per
+  decade over `energy_range_keV`, each level halves); each cell stores the
+  rising `R` (node at its upper edge) and falling `L` (node at its lower edge)
+  half-hat pieces, each as a one-`Ei`-bin IRF in the IRF's HDF5 format
+  (`Epsilon' = Em/E_lo - 1`), evaluated by `IRFRelativeHistUnpolarized` at
+  photon energy `E_lo` so it is normalized to its own selected area: s and S
+  are consistent per piece, for any grid. Parent = (1/2, 1, 1/2) sums of the
+  children (exact for the area; tables rebinned conserving contents).
+- Eps' edges per cell: the IRF's Eps edges + uniform ln(1+Eps') step
+  min(cell width / `steps_per_cell` (16), `max_epsilon_step` (ln10/64)). The
+  cap matters: through the photopeak the kernel follows the IRF's Ei
+  variation whatever the cell width (decade-wide cell, 16 steps: up to 9.5%
+  per-event error; with the cap 0.7%). Adding Eps' edges at the IRF's Ei
+  centers didn't help and was dropped.
+- Build the cache from the IRF **without** selections; pass the selected IRF
+  to the PSR (pieces get the same selections; pieces that can't reach the
+  selection are skipped). `cells_for(spectrum, cache, accuracy)` refines
+  while `(Delta^2/8) max|g''|/mean(g) > accuracy` on a dense grid; lines must
+  be `DiracDelta` (`mono_nodes_of`), evaluated with the original IRF.
+- Storage: chunked dense rows (one chunk per NuLambda pixel, unallocated
+  until written) + a `computed` mask set after the rows are flushed; a
+  `<cache>.lock` file for a single writer (delete it after a crash).
+- Supersedes #15's per-event (Epsilon-driven) nodes; #15's tests were
+  replaced. Validation: `validation/trapz_broadened/`.
+
 ## Validating on real files in a sandbox
 
 - The full hist IRF files hold 9.6 GB of contents. Without
