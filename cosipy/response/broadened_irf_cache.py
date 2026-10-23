@@ -38,7 +38,8 @@ was built, and are checked when the cache is opened again)::
     BROADENED/                attrs: energy_range_keV, cells_per_decade, weight_index,
                                      energy_degree (1: hats linear in ln E),
                                      direction_degree (1: linear between pixel centers),
-                                     steps_per_cell, max_epsilon_step, quadrature_step,
+                                     steps_per_cell, max_epsilon_step,
+                                     continuum_epsilon_step, quadrature_step,
                                      irf_id, version
         axes/                 Epsilon, Phi, Theta, Zeta axes of the IRF (the floor of the
                               Epsilon' binning and the CDS axes of every piece)
@@ -101,6 +102,8 @@ class BroadenedIRFCache:
     max_epsilon_step : float
         Maximum width of those bins. The error of the kernels decreases as the square of
         the width: with the default, 1/64 of a decade, it is ~0.5%.
+    continuum_epsilon_step : float
+        Width of the bins in ``Epsilon'`` below the photopeak (see :meth:`epsilon_edges`).
     quadrature_step : float, optional
         Step in ``ln E`` of the midpoint rule of the integral over the photon energy. By
         default, a quarter of the narrowest ``Epsilon`` bin of the IRF (in
@@ -117,6 +120,7 @@ class BroadenedIRFCache:
                  weight_index: float = -2.,
                  steps_per_cell: int = 16,
                  max_epsilon_step: float = np.log(10) / 64,
+                 continuum_epsilon_step: float = 0.05,
                  quadrature_step: float = None,
                  max_level: int = 6):
 
@@ -128,6 +132,7 @@ class BroadenedIRFCache:
         self._weight_index = float(weight_index)
         self._steps_per_cell = int(steps_per_cell)
         self._max_epsilon_step = float(max_epsilon_step)
+        self._continuum_epsilon_step = float(continuum_epsilon_step)
         self._max_level = int(max_level)
 
         ncells0 = (self._log10_range[1] - self._log10_range[0]) * self._cells_per_decade
@@ -150,6 +155,7 @@ class BroadenedIRFCache:
                        'direction_degree': 1,
                        'steps_per_cell': self._steps_per_cell,
                        'max_epsilon_step': self._max_epsilon_step,
+                       'continuum_epsilon_step': self._continuum_epsilon_step,
                        'quadrature_step': self._quadrature_step,
                        'irf_id': self._irf_id(irf),
                        'version': VERSION}
@@ -187,12 +193,19 @@ class BroadenedIRFCache:
 
     def epsilon_edges(self, level: int, index: int) -> np.ndarray:
         """
-        Edges of the ``Epsilon' = Em / a - 1`` axis of a cell ``[a, b]``: those of the
-        IRF's ``Epsilon`` axis, plus a uniform grid in ``ln(1 + Epsilon')`` from one cell
-        width below the photopeak to the highest reachable value,
-        ``ln(b/a) + ln(1 + eps_max)``. Its step is ``ln(b/a) / steps_per_cell``, but at
-        most ``max_epsilon_step``: through the photopeak (``Em ~ E``), the kernel follows
-        the variation of the IRF with ``Ei``, whatever the width of the cell.
+        Edges of the ``Epsilon' = Em / a - 1`` axis of a cell ``[a, b]``:
+
+        - those of the IRF's ``Epsilon`` axis;
+        - over the broadened photopeak, a uniform grid in ``ln(1 + Epsilon')``, from one
+          cell width below it to the highest reachable value,
+          ``ln(b/a) + ln(1 + eps_max)``. Its step is ``ln(b/a) / steps_per_cell``, but
+          at most ``max_epsilon_step``: through the photopeak (``Em ~ E``), the kernel
+          follows the variation of the IRF with ``Ei``, whatever the width of the cell;
+        - below it, over the Compton continuum, a uniform grid in ``Epsilon'`` of step
+          ``continuum_epsilon_step``. The coarse ``Epsilon`` bins of the IRF there are
+          not enough for the fraction of the kernel inside an energy selection whose
+          boundary falls in the continuum (-0.6% in the expected counts of the Crab with
+          a 200 keV cut; +0.02% with the default).
         """
 
         lo, hi = self.cell_edges_keV(level, index)
@@ -201,7 +214,8 @@ class BroadenedIRFCache:
         u_max = width + np.log1p(self._epsilon_edges[-1])
 
         k = np.arange(np.floor(-width / step), np.ceil(u_max / step) + 1)
-        edges = np.concatenate([self._epsilon_edges, np.expm1(k * step), [np.expm1(u_max)]])
+        continuum = np.arange(self._epsilon_edges[0], np.expm1(-width), self._continuum_epsilon_step)
+        edges = np.concatenate([self._epsilon_edges, np.expm1(k * step), [np.expm1(u_max)], continuum])
         edges = np.unique(edges[(edges >= self._epsilon_edges[0]) & (edges <= np.expm1(u_max))])
 
         # Drop edges that only differ by rounding
@@ -404,13 +418,8 @@ class BroadenedIRFCache:
         axes = irf.axes
         lo, hi = self.cell_edges_keV(level, index)
         eps_edges = self.epsilon_edges(level, index)
-
-        width = np.log(hi / lo)
-        nq = max(int(np.ceil(width / self._quadrature_step)), 1)
-        t = (np.arange(nq) + 0.5) / nq
-        energy = lo * np.exp(t * width)
-        de_w = (width / nq) * energy * energy ** self._weight_index  # dE w(E)
-        hats = {'R': t, 'L': 1 - t}
+        energy, de_w, hats = self._quadrature(level, index)
+        nq = energy.size
 
         # Ei interpolation weights of each quadrature energy, as a dense (nq, nEi) matrix
         ei_bins, ei_weights = (np.asarray(a) for a in axes['Ei'].interp_weights(energy))
@@ -492,8 +501,55 @@ class BroadenedIRFCache:
             Measured-energy selection, as for :class:`IRFRelativeHistUnpolarized`.
         """
 
-        return tuple(IRFRelativeHistUnpolarized(_PieceRows(self, level, index, piece), selections=selections)
+        areas = self._piece_areas(level, index)
+
+        return tuple(IRFRelativeHistUnpolarized(_PieceRows(self, level, index, piece),
+                                                aeff=None if areas is None else areas[piece],
+                                                selections=selections)
                      for piece in PIECES)
+
+    def _quadrature(self, level: int, index: int):
+        """Midpoint rule in ln E over a cell: energies, dE w(E), and the R and L hats."""
+
+        lo, hi = self.cell_edges_keV(level, index)
+        width = np.log(hi / lo)
+        nq = max(int(np.ceil(width / self._quadrature_step)), 1)
+        t = (np.arange(nq) + 0.5) / nq
+        energy = lo * np.exp(t * width)
+
+        return energy, (width / nq) * energy * energy ** self._weight_index, {'R': t, 'L': 1 - t}
+
+    def _piece_areas(self, level: int, index: int):
+        """
+        If the IRF has a separate total effective area (usually on a finer grid), the
+        area of the pieces on that grid: ``int h w Aeff dE`` for each of its pixels. The
+        area is linear in its table, so this is exactly the integral over the cell of the
+        area that the IRF interpolates, wherever it is evaluated. Otherwise None, and the
+        area of each pixel is computed with its contents.
+        """
+
+        irf = self._irf
+        if irf._aeff_from_irf:
+            return None
+
+        aeff = irf._tot_aeff
+        energy, de_w, hats = self._quadrature(level, index)
+        inside = irf._in_ei_range(aeff, energy)
+
+        ei_bins, ei_weights = (np.asarray(a) for a in aeff.axes['Ei'].interp_weights(energy))
+        ei_matrix = np.zeros((energy.size, aeff.axes['Ei'].nbins))
+        for b, w in zip(ei_bins, ei_weights):
+            np.add.at(ei_matrix, (np.arange(energy.size), b), w)
+
+        lo, hi = self.cell_edges_keV(level, index)
+        areas = {}
+        for piece in PIECES:
+            # New axes for each, since the IRF standardizes them in place
+            axes = Axes([aeff.axes['NuLambda'], Axis([lo, hi] * u.keV, label='Ei', scale='log')])
+            contents = np.asarray(aeff.contents) @ ((hats[piece] * de_w * inside) @ ei_matrix)
+            areas[piece] = Histogram(axes, contents=contents[:, None], unit=u.cm ** 2)
+
+        return areas
 
     def _read_piece_pixel(self, level: int, index: int, piece: str, pixel: int):
         """Contents and total effective area of one pixel of a piece."""

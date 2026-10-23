@@ -192,7 +192,7 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
         :meth:`_open_h5_axes`); photons outside those bins get zero area and
         probability, which is what the selection gives them anyway. A row
         provider, an object with ``axes``, ``unit`` and ``read_pixel`` (see
-        :meth:`_load_pixels`), is loaded lazily the same way, without ``aeff``.
+        :meth:`_load_pixels`), is loaded lazily the same way.
     aeff : histpy.Histogram, optional
         A separate 2D histogram, with axes ``['NuLambda', 'Ei']`` and
         contents in units equivalent to area (``cm^2``), used as the
@@ -502,7 +502,8 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
         With a row provider instead of a file, its ``read_pixel(pixel)`` returns the
         contents of the pixel (cm2 per bin, axes ``Ei``, ``Epsilon``, ``Phi``,
         ``Theta``, ``Zeta``) and its total effective area per ``Ei`` bin, which is
-        used instead of the projection of the contents.
+        used instead of the projection of the contents (unless a separate ``aeff``
+        was given).
         """
 
         if not isinstance(self._source, tuple):
@@ -511,7 +512,8 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
                 contents[...], area = self._source.read_pixel(pixel)
                 contents *= self._area_unit_factor
                 self._normalize_pixel(pixel, contents)
-                self._tot_aeff.contents[pixel] = area
+                if self._aeff_from_irf:
+                    self._tot_aeff.contents[pixel] = area
             return
 
         filename, group, ei_bins = self._source

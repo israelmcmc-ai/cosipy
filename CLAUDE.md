@@ -266,7 +266,17 @@ if it's blocked, say so and validate with synthetic histograms.
   cap matters: through the photopeak the kernel follows the IRF's Ei
   variation whatever the cell width (decade-wide cell, 16 steps: up to 9.5%
   per-event error; with the cap 0.7%). Adding Eps' edges at the IRF's Ei
-  centers didn't help and was dropped.
+  centers didn't help and was dropped. Below the photopeak grid, a uniform
+  Eps' step of `continuum_epsilon_step` (0.05): with only the IRF's coarse
+  continuum bins, the fraction inside a 200 keV cut was off and the 3 h Crab
+  `S` was -0.6% vs brute force (+0.02% with it).
+- With a separate (finer) `AEFF` in the IRF, the piece areas are computed on
+  its grid as `aeff.contents @ (int h w Ei-interp-weights dE)`: exactly the
+  integral of the area the IRF interpolates. Sampling the area at the IRF's
+  768 pixel centers instead gave -0.2% in `S`.
+- Histograms are in reference cycles (with their accessors): free the piece
+  IRFs of each cell with `del` + `gc.collect()`, or the tables of all cells
+  stay in memory (1 GB per cell for 151 pixels).
 - Build the cache from the IRF **without** selections; pass the selected IRF
   to the PSR (pieces get the same selections; pieces that can't reach the
   selection are skipped). `cells_for(spectrum, cache, accuracy)` refines

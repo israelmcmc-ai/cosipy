@@ -199,3 +199,30 @@ def test_without_a_file_same_pieces(cache, irf):
 
     with pytest.raises(RuntimeError):
         memory.ensure([(0, 0)], [PIXEL])
+
+
+def test_area_on_the_finer_grid_of_a_separate_aeff(tmp_path):
+    """With a separate (finer) total effective area, the area of a piece at any direction
+    is the integral of the hat times w times the area that the IRF interpolates there."""
+
+    path = tmp_path / 'irf.h5'
+    make_irf_hist().write(path, name='IRF')
+    rng = np.random.default_rng(2)
+    aeff_axes = Axes([HealpixAxis(nside=4, scheme='ring', coordsys=SpacecraftFrame(), label='NuLambda'),
+                      Axis(np.geomspace(80, 1200, 30) * u.keV, label='Ei', scale='log')])
+    Histogram(aeff_axes, contents=rng.random(aeff_axes.nbins) * 100, unit=u.cm ** 2).write(path, name='AEFF')
+
+    irf = IRFRelativeHistUnpolarized.from_h5(path)
+    cache = BroadenedIRFCache(irf, energy_range_keV=(100., 1000.))
+    lo, hi = cache.cell_edges_keV(1, 1)
+    lon, lat = 0.7, 0.3  # not at a pixel center
+
+    energy = np.geomspace(lo, hi, 200_001)
+    t = np.log(energy / lo) / np.log(hi / lo)
+    aeff = np.asarray(irf.effective_area_cm2(PhotonListWithDirectionAndEnergyInSCFrame(
+        np.full(energy.size, lon), np.full(energy.size, lat), energy)))
+
+    photons = PhotonListWithDirectionAndEnergyInSCFrame(np.array([lon]), np.array([lat]), np.array([lo]))
+    for piece_irf, hat in zip(cache.piece_irfs(1, 1), (t, 1 - t)):
+        assert piece_irf.effective_area_cm2(photons)[0] == pytest.approx(
+            np.trapezoid(hat * energy ** -2. * aeff, energy), rel=1e-3)
