@@ -171,15 +171,12 @@ legibility). Supersedes PRs #15, #26, #27, #28 (closed or to be closed).
 - PR 4: branch `generators-analytic-bkg` (on PR 3), not opened yet. Done:
   `IRFRelativeHistUnpolarized._random_events`, `simulate_point_source_events`
   (`direction_at`), `IsotropicPowerLawBackground`, tests,
-  `validation/closure/closure.ipynb` (needs a rerun; silence RuntimeWarnings or
-  the fits print ~430k lines). Closure, 3 h Crab, 40 realizations, seeds 0-39:
-  c = 1.0007 +- 0.0015, signal-only unbiased, with background K -5% +- 2%,
-  index -0.06 +- 0.02, with both 15 s midpoint and 1 s attitude sampling
-  (maintainer approved `attitude_step`, now in #33). With photons generated at
-  the midpoints the bias was -1% / -0.02 (consistent with 0). The same seeds
-  were used in the event-mode runs, so they're one data set: rerunning with
-  seeds 1000+ (`closure_seeds.py` in the scratchpad) to tell bias from
-  fluctuation.
+  `validation/closure/closure.ipynb`. Closure, 3 h Crab: c = 1.0007 +- 0.0015.
+  With background, seeds 0-39: K -5% +- 2%, index -0.06 +- 0.02 (15 s or 1 s
+  attitude); seeds 1000-1039 (with 1 s and the SLERP fix): K +2.0% +- 2.5%,
+  index +0.022 +- 0.022. Combined: -1.6% +- 1.6%, -0.020 +- 0.016, so the
+  earlier "bias" was a fluctuation. Notebook rerunning with 80 realizations
+  (seeds 0-79), detached with nohup (> 2 h); then open PR 4.
 - Found on the way: SLERP bug in `SpacecraftHistory._interp_attitude`
   (doubled angle, no q/-q flip; 0.24% of DC4 intervals garbage near their
   midpoint): israelmcmc-ai/cosipy#34 against `develop`, cherry-picked into
