@@ -150,7 +150,8 @@ legibility). Supersedes PRs #15, #26, #27, #28 (closed or to be closed).
 ### PR 5: Histogram background (on #23) and the Crab fits
 
 - Check the background model's own consistency (integral of b = B).
-- Crab fits on the mock data, 3 h windows and the full 3 months: signal-only,
+- Crab fits on the mock data, 3 h windows (the 3-month fit is dropped: 98M
+  events after the distance cut, too much for an unbinned fold here): signal-only,
   ideal background, histogram background (template from bkg only and from all
   events). Update the GRB and Crab tutorials.
 
