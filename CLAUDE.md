@@ -169,18 +169,21 @@ legibility). Supersedes PRs #15, #26, #27, #28 (closed or to be closed).
   Real file, 3 h Crab: S/brute 1.0002, per-event median 0.9995 (0.7%
   weighted), 150 s per source position. Notebook `validation/trapz_broadened/`.
 - PR 4: branch `generators-analytic-bkg` (on PR 3), not opened yet. Done:
-  `IRFRelativeHistUnpolarized._random_events` (rejection, envelope = weighted
-  max-filtered corner tables), `simulate_point_source_events`
-  (`cosipy/source_injector/point_source_events.py`, `direction_at`),
-  `IsotropicPowerLawBackground` (`cosipy/background_estimation/analytic_background.py`),
-  tests, and `validation/closure/closure.ipynb`. Closure result, 3 h Crab, 40
-  realizations: c = 1.0009 +- 0.0015, signal-only unbiased, but with
-  background K -4.5% +- 2.1% and index -0.064 +- 0.022. Hypothesis being
-  tested: attitude change within the 15 s intervals (events generated at the
-  event-time direction, folding at the interval midpoint; ~1 deg per 15 s vs
-  ~1 deg ARM core). Diagnostic run with `direction_at='midpoint'`. If
-  confirmed, the folding needs sub-interval attitude sampling (same samples
-  for s and S). Ask the maintainer before changing the design.
+  `IRFRelativeHistUnpolarized._random_events`, `simulate_point_source_events`
+  (`direction_at`), `IsotropicPowerLawBackground`, tests,
+  `validation/closure/closure.ipynb` (needs a rerun; silence RuntimeWarnings or
+  the fits print ~430k lines). Closure, 3 h Crab, 40 realizations, seeds 0-39:
+  c = 1.0007 +- 0.0015, signal-only unbiased, with background K -5% +- 2%,
+  index -0.06 +- 0.02, with both 15 s midpoint and 1 s attitude sampling
+  (maintainer approved `attitude_step`, now in #33). With photons generated at
+  the midpoints the bias was -1% / -0.02 (consistent with 0). The same seeds
+  were used in the event-mode runs, so they're one data set: rerunning with
+  seeds 1000+ (`closure_seeds.py` in the scratchpad) to tell bias from
+  fluctuation.
+- Found on the way: SLERP bug in `SpacecraftHistory._interp_attitude`
+  (doubled angle, no q/-q flip; 0.24% of DC4 intervals garbage near their
+  midpoint): israelmcmc-ai/cosipy#34 against `develop`, cherry-picked into
+  the PR 4 branch.
 - PR 5 not started.
 
 ### Deferred
