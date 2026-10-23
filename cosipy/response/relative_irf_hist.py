@@ -1013,6 +1013,16 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
         is not conditional on passing them. See
         :meth:`_interp_event_prob` for the relative coordinates used.
 
+        This equals the selected area (:meth:`_effective_area_cm2`,
+        ``A f``) times the conditional probability
+        (:meth:`_event_probability`, ``p / f``): the selected fraction
+        ``f`` cancels, so it is not computed here. ``_tot_aeff`` is kept
+        unselected because ``f`` depends on the exact photon energy (the
+        cut is at ``Epsilon = E_cut / Ei - 1``): applying it per ``Ei``
+        bin and interpolating the product would not be the integral of
+        the interpolated density over the cut, so ``f`` is computed per
+        photon instead (:meth:`_selected_fraction`).
+
         Parameters
         ----------
         photons : PhotonListWithDirectionAndEnergyInSCFrameInterface
