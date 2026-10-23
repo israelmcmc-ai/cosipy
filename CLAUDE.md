@@ -169,16 +169,48 @@ if it's blocked, say so and validate with synthetic histograms.
     EFF_AREA (MEGAlib simulation, `hist_simple` mode).
   - `scripts/IRFRelativeHist/relative_hist_irf_from_nf_response.py`:
     `tot_aeff · density · phase_space_cds · Ei_center·ΔEps` (`hist_nn` mode).
-
-  `__init__` divides by the phase space (CDS volume and `Ei_center·ΔEps`)
-  to get `_diff_aeff`.
-- `_tot_aeff` is either `irf.project('NuLambda', 'Ei')` or a separate `aeff`
-  histogram (usually finer). `from_h5` reads an `AEFF` group automatically
-  if present. `_tot_aeff` is linearly interpolated in `Ei` at evaluation
-  time.
+- `__init__` turns it into `_event_prob`, a density **per unit Epsilon**
+  (`1/sr/rad`), divided by the photon `Ei` when evaluated (`dEm = Ei dEps`).
+  It divides by the CDS bin phase space and `ΔEps`, then normalizes each
+  `(NuLambda, Ei)` slice by the integral of its *interpolant* with the true
+  measure `sin(phi+theta) dphi dtheta dzeta dEps` (`_cds_marginal`: hats at
+  `_CDS_SUBDIVISIONS` = 32 sub-bins per `Phi`/`Theta` bin times the exact
+  sub-bin phase space, exact `Zeta` and `Epsilon` hat integrals; error ~1e-4).
+  The interpolation between `Ei` centers is at fixed `Epsilon`, so per unit
+  `Epsilon` every slice and every convex combination integrates to 1 (per keV
+  it was `(1-t) r^t + t r^(t-1) >= 1`, up to ~2%).
+- Edges (histpy `fill_value`, needs israelmcmc-ai/histpy#1 until released):
+  `Epsilon` ramps linearly to 0 between the outer centers and the edges and
+  is 0 beyond (`fill_value=0, extrapolate=True`); `Zeta` is periodic (no
+  `% 2pi` wrapping needed); other axes clamp to the outer centers. Photons
+  outside the `Ei` edges get zero area and probability (`_in_ei_range`).
+  `_FILL_VALUE` holds the per-axis setting; `_Hats` is the matching
+  piecewise-linear hat representation (knots = edges + centers) used for all
+  the exact integrals, and is tested against `Axis.interp_weights`.
+- **Lazy loading** (`from_h5`, or `__init__` with a filename): each
+  `NuLambda` pixel row is read (`read_direct` into a full-size `np.zeros`
+  array whose pages are only committed when written) and normalized
+  (`_normalize_pixel`) the first time it is needed. Every evaluation calls
+  `_ensure_loaded(photon_dir)` first (the only choke point; it reads the
+  pixels with nonzero `NuLambda` interp weights; no-op once everything is
+  loaded). The file is opened per read, so the model pickles. `preload=True`
+  reads everything up front. A `Histogram` input is normalized in place, pixel
+  by pixel, with the same `_normalize_pixel`. On the real `hist_simple` file
+  (200-5000 keV cut): eager PR 1 load 43 s / 12.2 GB; `preload` 38 s / 9.8 GB;
+  lazy 0.2 s, and 0.77 GB after a 20 deg drift of a source (7 of 768 pixels).
+  With `selections`, only the `Ei` bins that can produce `Em` in the cut are
+  read (plus one bin each side, so interpolation is unchanged). The real
+  files have `Epsilon` down to -1, so this only drops low-`Ei` bins (none for
+  a 200 keV lower cut).
+- `_tot_aeff` is either `irf.project('NuLambda', 'Ei')` (filled per pixel as
+  pixels load) or a separate `aeff` histogram (usually finer, loaded whole),
+  always **unselected**. `from_h5` reads an `AEFF` group automatically if
+  present. It is linearly interpolated in `Ei`.
+  `_differential_effective_area_cm2` = unselected area × event probability.
 - The tutorial is
   `docs/tutorials/spectral_fits/continuum_fit/grb/example_grb_fit_relative_hist_response.ipynb`
-  (`irf_mode` = `hist_simple` / `hist_nn` / `nn`).
+  (`irf_mode` = `hist_simple` / `hist_nn` / `nn`). The normalization is
+  validated on the real file in `validation/irf_normalization/`.
 
 ### Energy selections (`selections=EnergySelector(...)`)
 
@@ -186,42 +218,32 @@ if it's blocked, say so and validate with synthetic histograms.
   (`cosipy/event_selection/energy_selection.py`) has
   `energy_ranges_keV`, `min/max_energy[_keV]`, `union`, `intersect`,
   `except_`.
-- `_apply_energy_selection` scales `_tot_aeff` per `(NuLambda, Ei)` by the
-  fraction of area with `Em` inside the cut. `_diff_aeff` is never modified.
-  - **Same grid** (no separate `aeff`): the fraction is computed at irf's own
-    `Ei` centers and the grid is not refined.
-  - **Separate `aeff`**:
-    1. `_refine_ei_edges` adds `Ei` edges at `E_cut / (1 + Epsilon)` for
-       every Epsilon edge and center (the fraction's kinks), keeping all the
-       original edges.
-    2. `_regrid_ei` resamples `aeff` onto the refined grid using the axis's
-       own `interp_weights`.
-    3. irf's `(NuLambda, Ei, Epsilon)` projection is interpolated onto that
-       grid one Epsilon center at a time.
-    4. `_selection_fraction` evaluates the cut at each exact target `Ei`.
+- `_effective_area_cm2` = unselected area × `_selected_fraction`;
+  `_event_probability` divides by the fraction (conditional on passing).
+  `_event_prob` is never modified.
+- `_selected_fraction` is computed per photon from the same interpolant as
+  the density: the same `NuLambda` (4 pixels) and `Ei` (2 bins, log-domain)
+  weights, and `_epsilon_marginal` (normalized CDS-integrated table per
+  `(NuLambda, Ei, Epsilon center)`) contracted with the exact integral of each
+  `Epsilon` hat over the cut (`_Hats.cumulative` at `E_cut / Ei - 1`). So the
+  selected area is exactly the integral of the differential area over the
+  selected `Em`, for any cut width, with no `Ei` grid refinement, and a cut
+  covering everything gives exactly 1.
 
-    So `_tot_aeff` can end up with more `Ei` bins than the `aeff` passed in.
-- `_integrate_piecewise_linear` integrates the per-Epsilon density
-  (content/ΔEps), linear between centers and flat beyond the first/last
-  center. Integrating over the full range is **not** exactly the content
-  sum when bins are non-uniform, so `content.sum()` is used as the total.
+### Lessons from the normalization and the selection
 
-### Lessons from debugging narrow energy cuts
-
-- The two changes that mattered:
-  1. Evaluate the fraction at the target `Ei` instead of interpolating a
-     fraction computed on irf's coarse grid.
-  2. Refine the `aeff` grid. With `geomspace(50, 10000, 41)` and a
-     495–505 keV cut, sampling only at bin centers made the integral over
-     `Ei` about 2× too large; refining brings it within 0.2%.
+- In a background-dominated unbinned fit, any mismatch between the integral
+  of the source density over the selected data space and the expected counts
+  biases the flux by ~10-20× the mismatch. That is why the selected fraction
+  comes from the interpolated density itself and not from a separately
+  interpolated/refined `aeff`, and why the normalization uses the
+  interpolant's integral (with non-uniform bins it is not the content sum; a
+  uniform measure within bins gave -2.4% to +1.1% on the real response).
 - Integrating over `dEps` vs `dEm` at a fixed `Ei` is just a change of
   variables (numerically identical), so it's not a source of error.
-- Interpolating content as a density across `Ei` (divide by native `Ei`,
-  multiply by the target) was tried and reverted as not worth the
-  complexity.
 - A synthetic test whose Epsilon profile has the same shape and scale at
   every `Ei` can't catch `Ei`-interpolation problems. Use shapes that vary
-  with `Ei` when testing those.
+  with `Ei`, and photons between `Ei` and `NuLambda` centers.
 
 ## Validating on real files in a sandbox
 
@@ -263,8 +285,8 @@ if it's blocked, say so and validate with synthetic histograms.
 ## histpy gotchas
 
 - `Histogram.interp()` / `Axis.interp_weights()` on a `scale='log'` axis
-  interpolate linearly in **log(x)** between bin centers, and clamp to the
-  first/last center.
+  interpolate linearly in **log(x)** between bin centers, and by default
+  clamp to the first/last center (see `fill_value`/`extrapolate`, histpy#1).
 - `Histogram.copy()` doesn't deep-copy `Axis` objects, and
   `IRFRelativeHistUnpolarized.__init__` strips units from axes in place.
   So after constructing a model, the caller's original `irf`/`aeff`
