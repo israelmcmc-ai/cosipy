@@ -93,11 +93,10 @@ class UnbinnedThreeMLPointSourceResponseTrapz(UnbinnedThreeMLSourceResponseInter
         attitude_step : Quantity
             Maximum time between attitude samples. Each interval of ``sc_history`` is
             split in equal sub-intervals no longer than this, sampled at their midpoint.
-            The source moves in the spacecraft frame within an interval (up to ~1 deg in
-            15 s for a rocking or zenith-pointing spacecraft), and sampling only its
-            midpoint makes the model sharper than the data in angle: with 15 s
-            intervals, a 3 h Crab fit with background was biased by about -5% in flux
-            and -0.06 in index. The cost of finer steps is only in ``S``.
+            The source moves in the spacecraft frame within an interval (~1 deg in 15 s
+            for the DC4 orientation, several deg during slews), which sampling only its
+            midpoint would leave out of the model. The cost of finer steps is only in
+            ``S``.
         """
 
         self._source = None

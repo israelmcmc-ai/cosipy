@@ -254,11 +254,11 @@ if it's blocked, say so and validate with synthetic histograms.
   sub-intervals of at most `attitude_step` (1 s), sampled at their midpoint;
   events use their sub-interval's sample, `S` all of them. A dense-Ei folding
   with event-time attitude for the density and midpoint for `S` had c = 1.006,
-  enough to bias a background fit. Sampling only the 15 s interval midpoints
-  (c = 1 still) biased the 3 h Crab closure with background by K -4.5% +- 2.1%,
-  index -0.064 +- 0.022 (40 realizations; unbiased when the photons were
-  generated at the midpoint): the source moves ~1 deg per 15 s in the SC frame,
-  so the model's ARM is too sharp.
+  enough to bias a background fit. The source moves ~1 deg per 15 s interval
+  in the SC frame (several deg in slews), hence the 1 s samples. Its effect on
+  the 3 h Crab closure is not measurable: an apparent -5% / -0.06 bias with 40
+  realizations (seeds 0-39) was there with 15 s and 1 s sampling alike, and
+  another 40 (seeds 1000-1039) gave +2% +- 2.5% / +0.02 +- 0.02.
 - `BroadenedIRFCache`: cells in log10 E (level 0 = `cells_per_decade` per
   decade over `energy_range_keV`, each level halves); each cell stores the
   rising `R` (node at its upper edge) and falling `L` (node at its lower edge)
