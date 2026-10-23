@@ -168,15 +168,13 @@ legibility). Supersedes PRs #15, #26, #27, #28 (closed or to be closed).
   default, HDF5 optional) + rewritten `UnbinnedThreeMLPointSourceResponseTrapz`.
   Real file, 3 h Crab: S/brute 1.0002, per-event median 0.9995 (0.7%
   weighted), 150 s per source position. Notebook `validation/trapz_broadened/`.
-- PR 4: branch `generators-analytic-bkg` (on PR 3), not opened yet. Done:
-  `IRFRelativeHistUnpolarized._random_events`, `simulate_point_source_events`
-  (`direction_at`), `IsotropicPowerLawBackground`, tests,
-  `validation/closure/closure.ipynb`. Closure, 3 h Crab: c = 1.0007 +- 0.0015.
-  With background, seeds 0-39: K -5% +- 2%, index -0.06 +- 0.02 (15 s or 1 s
-  attitude); seeds 1000-1039 (with 1 s and the SLERP fix): K +2.0% +- 2.5%,
-  index +0.022 +- 0.022. Combined: -1.6% +- 1.6%, -0.020 +- 0.016, so the
-  earlier "bias" was a fluctuation. Notebook rerunning with 80 realizations
-  (seeds 0-79), detached with nohup (> 2 h); then open PR 4.
+- PR 4: israelmcmc-ai/cosipy#35 (branch `generators-analytic-bkg`, on PR 3),
+  open, watched. `IRFRelativeHistUnpolarized._random_events`,
+  `simulate_point_source_events`, `IsotropicPowerLawBackground`, tests,
+  `validation/closure/closure.ipynb` (80 realizations, seeds 0-79, folded in
+  chunks of 20 to fit in memory; ~3.5 h). 3 h Crab: c = 1.0000 +- 0.0011; with
+  background K -1.0% +- 1.7%, index -0.013 +- 0.018; signal only +0.3% +- 0.3%,
+  +0.004 +- 0.003. (Seeds 0-39 alone gave -5% / -0.06: a fluctuation.)
 - Found on the way: SLERP bug in `SpacecraftHistory._interp_attitude`
   (doubled angle, no q/-q flip; 0.24% of DC4 intervals garbage near their
   midpoint): israelmcmc-ai/cosipy#34 against `develop`, cherry-picked into
