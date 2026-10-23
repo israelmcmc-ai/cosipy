@@ -382,6 +382,9 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
         self._selection_ranges = (None if combined_selector is None
                                   else np.asarray(combined_selector.energy_ranges_keV, dtype=float))
 
+        # Random number generator of _random_events
+        self.rng = np.random.default_rng()
+
         # Extra params
         self._nthreads = nthreads
         self._npoints_parallel_thresh = npoints_parallel_thresh
@@ -1103,10 +1106,134 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
 
         return np.divide(prob, fraction, out=np.zeros_like(prob), where=fraction > 0)
 
-    def _random_events(self, photons: PhotonListWithDirectionInSCFrameInterface) -> EventDataInterface:
+    def _random_events(self, photons: PhotonListWithDirectionAndEnergyInSCFrameInterface,
+                       candidates_per_round: int = 16, max_rounds: int = 100_000) -> EventDataInterface:
         """
-        Not implemented yet; provided to satisfy the
-        :class:`FarFieldSpectralInstrumentResponseFunctionInterface`
-        contract.
+        One random event per photon, drawn from the event probability as evaluated by
+        :meth:`_event_probability`: the interpolated density, conditional on passing the
+        selections if there are any. Uses the generator ``self.rng``.
+
+        The relative coordinates (``Epsilon``, ``Phi``, ``Theta``, ``Zeta``) are drawn by
+        rejection sampling with the true measure ``sin(phi + theta)``. The envelope of
+        each (``Epsilon``, ``Phi``, ``Theta``, ``Zeta``) bin bounds the interpolant in it:
+        the weighted sum, over the ``NuLambda`` and ``Ei`` corners of the photon, of the
+        maximum of each corner table over the bin and its neighbors (the interpolant in a
+        bin only uses those), times the maximum of ``sin(phi + theta)`` in the bin.
+        Candidates are drawn bin by bin from the envelope and uniformly within the bin,
+        and accepted with probability density / envelope. Candidates outside the
+        selections are rejected.
+
+        Parameters
+        ----------
+        photons : PhotonListWithDirectionAndEnergyInSCFrameInterface
+            Photons, with energies within the ``Ei`` axis.
+        candidates_per_round : int
+            Candidates drawn per photon at a time.
+        max_rounds : int
+            Rounds of candidates after which a photon that can't produce events inside
+            the selections raises an error.
+
+        Returns
+        -------
+        EmCDSEventDataInSCFrameFromArrays
         """
-        raise NotImplementedError("random_events not implemented yet.")
+
+        from cosipy.data_io.EmCDSUnbinnedData import EmCDSEventDataInSCFrameFromArrays
+
+        lon, lat, energy = self._photon_list_to_raw_values(photons)
+        if not np.all(self._in_ei_range(self._event_prob, energy)):
+            raise ValueError("The photon energies must be within the range of the Ei axis")
+
+        n = energy.size
+        direction = UnitSphericalRepresentation(lon=Quantity(lon, 'rad', copy=False),
+                                                lat=Quantity(lat, 'rad', copy=False))
+        self._ensure_loaded(direction)
+
+        axes = self.axes
+        pixels, pixel_weights = (np.asarray(a) for a in axes['NuLambda'].interp_weights(direction))
+        ei_bins, ei_weights = (np.asarray(a) for a in axes['Ei'].interp_weights(energy))
+        edges = [np.asarray(axes[label].edges, dtype=float) for label in ('Epsilon', 'Phi', 'Theta', 'Zeta')]
+        widths = [np.diff(e) for e in edges]
+
+        # Envelope volume of each bin: its size times the maximum of sin(phi + theta) in it
+        volume = (widths[0][:, None, None, None]
+                  * (self._sin_max(edges[1], edges[2]) * widths[1][:, None] * widths[2][None, :])[None, :, :, None]
+                  * widths[3][None, None, None, :])
+        shape = volume.shape
+
+        relative = np.full((n, 4), np.nan)
+
+        for i in range(n):
+            envelope = sum(wp * we * self._max_table(p, k)
+                           for p, wp in zip(pixels[:, i], pixel_weights[:, i])
+                           for k, we in zip(ei_bins[:, i], ei_weights[:, i]) if wp * we > 0)
+            cdf = np.cumsum((envelope * volume).ravel())
+            if not cdf[-1] > 0:
+                raise ValueError(f"Photon {i} can't produce events: its response is zero")
+
+            rounds = 0
+            while np.isnan(relative[i, 0]):
+                rounds += 1
+                if rounds > max_rounds:
+                    raise RuntimeError(f"No event accepted for photon {i} after {max_rounds} rounds: "
+                                       f"it can hardly produce events inside the selections")
+                m = candidates_per_round
+                bins = np.minimum(np.searchsorted(cdf, self.rng.random(m) * cdf[-1], side='right'), cdf.size - 1)
+                index = np.unravel_index(bins, shape)
+                x = [e[j] + self.rng.random(m) * w[j] for e, w, j in zip(edges, widths, index)]
+                eps, phi, theta, zeta = x
+
+                density = np.asarray(self._event_prob.interp(
+                    UnitSphericalRepresentation(lon=np.full(m, lon[i]) * u.rad, lat=np.full(m, lat[i]) * u.rad),
+                    np.full(m, energy[i]), eps, phi, theta, zeta, fill_value=self._FILL_VALUE, extrapolate=True))
+                target = density * np.clip(np.sin(phi + theta), 0, None)
+                bound = envelope[index] * self._sin_max(edges[1], edges[2])[index[1], index[2]]
+
+                accept = self.rng.random(m) * bound < target
+                if self._selection_ranges is not None:
+                    em = energy[i] * (1 + eps)
+                    accept &= np.any((em[:, None] >= self._selection_ranges[:, 0])
+                                     & (em[:, None] < self._selection_ranges[:, 1]), axis=1)
+
+                if accept.any():
+                    relative[i] = [a[np.argmax(accept)] for a in x]
+
+        eps, phi, theta, zeta = relative.T
+        relcoords = RelativeCDSCoordinates(direction.to_cartesian().xyz, pol_convention=self._pol_convention)
+        x, y, z = (np.asarray(c) for c in relcoords.to_cds(phi + theta, zeta))
+
+        return EmCDSEventDataInSCFrameFromArrays(energy * (1 + eps), np.arctan2(y, x),
+                                                 np.arcsin(np.clip(z, -1, 1)), phi)
+
+    @staticmethod
+    def _sin_max(phi_edges: np.ndarray, theta_edges: np.ndarray) -> np.ndarray:
+        """
+        Maximum of ``max(sin(phi + theta), 0)`` over each (``Phi``, ``Theta``) bin.
+        """
+
+        lo = phi_edges[:-1, None] + theta_edges[None, :-1]
+        hi = phi_edges[1:, None] + theta_edges[None, 1:]
+
+        smax = np.maximum(np.sin(np.clip(lo, 0, np.pi)), np.sin(np.clip(hi, 0, np.pi)))
+        smax = np.where((lo < np.pi / 2) & (hi > np.pi / 2), 1., smax)
+
+        return np.where((hi <= 0) | (lo >= np.pi), 0., smax)
+
+    def _max_table(self, pixel: int, ei_bin: int) -> np.ndarray:
+        """
+        The normalized table of a (``NuLambda``, ``Ei``) bin, maximized over each
+        (``Epsilon``, ``Phi``, ``Theta``, ``Zeta``) bin and its neighbors (``Zeta``
+        is periodic), for the envelope of :meth:`_random_events`. Cached.
+        """
+
+        from scipy.ndimage import maximum_filter
+
+        if not hasattr(self, '_max_tables'):
+            self._max_tables = {}
+
+        key = (int(pixel), int(ei_bin))
+        if key not in self._max_tables:
+            self._max_tables[key] = maximum_filter(self._event_prob.contents[key], size=3,
+                                                   mode=('nearest', 'nearest', 'nearest', 'wrap')).astype(np.float32)
+
+        return self._max_tables[key]

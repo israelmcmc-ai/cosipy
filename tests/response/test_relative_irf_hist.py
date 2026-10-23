@@ -13,6 +13,7 @@ from cosipy.event_selection.distance_selection import DistanceSelector
 from cosipy.event_selection.energy_selection import EnergySelector
 from cosipy.polarization import PolarizationAxis, StereographicConvention
 from cosipy.response.relative_coordinates import RelativeCDSCoordinates
+from cosipy.response.photon_types import PhotonListWithDirectionAndEnergyInSCFrame
 from cosipy.response.relative_irf_hist import IRFRelativeHistUnpolarized, _Hats
 
 
@@ -1047,3 +1048,74 @@ class TestLazyLoading:
 
         np.testing.assert_allclose(copy._event_probability(photons, events),
                                    model._event_probability(photons, events), rtol=1e-12)
+
+
+class TestRandomEvents:
+    """random_events draws one event per photon from the event probability as evaluated."""
+
+    @staticmethod
+    def _chi2_pvalue(counts, expected):
+        from scipy.stats import chi2
+        keep = expected > 5
+        stat = np.sum((counts[keep] - expected[keep]) ** 2 / expected[keep])
+        return chi2.sf(stat, keep.sum() - 1)
+
+    @pytest.mark.parametrize('selection', [None, [190., 260.]])
+    def test_follow_the_event_probability(self, selection):
+        """Marginal distributions in Epsilon, Phi, Theta and Zeta bins, compared with the
+        integral of the probability (sub-cell integration, true measure)."""
+
+        selections = None if selection is None else EnergySelector(u.Quantity(selection, u.keV))
+        model = IRFRelativeHistUnpolarized(_make_physical_irf_hist(), selections=selections)
+        model.rng = np.random.default_rng(1)
+        lon, lat, energy = PHOTONS_AT[1]
+        n = 4000
+
+        events = model.random_events(PhotonListWithDirectionAndEnergyInSCFrame(
+            np.full(n, lon), np.full(n, lat), np.full(n, energy)))
+        em = np.asarray(events.energy_keV)
+
+        cuts = [] if selection is None else [x / energy - 1 for x in selection]
+        density, eps_mids, weight = TestEventProbability._density_on_sub_cells(model, lon, lat, energy, cuts)
+        prob = density * weight
+        if selection is not None:
+            assert np.all((em >= selection[0]) & (em < selection[1]))
+            inside = (energy * (1 + eps_mids) >= selection[0]) & (energy * (1 + eps_mids) < selection[1])
+            prob = prob * inside[:, None, None, None]
+        prob /= prob.sum()
+
+        # The sampled relative coordinates, recomputed from the events like the IRF does
+        photon_dir = _direction(np.full(n, lon), np.full(n, lat))
+        relcoords = RelativeCDSCoordinates(photon_dir.to_cartesian().xyz, pol_convention=model._pol_convention)
+        phi_geo, zeta = relcoords.to_relative(UnitSphericalRepresentation(
+            lon=np.asarray(events.scattered_lon_rad_sc) * u.rad,
+            lat=np.asarray(events.scattered_lat_rad_sc) * u.rad).to_cartesian().xyz)
+        phi = np.asarray(events.scattering_angle_rad)
+        sampled = [em / energy - 1, phi, phi_geo.to_value(u.rad) - phi, zeta.to_value(u.rad) % (2 * np.pi)]
+
+        mids, _ = TestEventProbability._sub_cells(model, energy, cuts)
+        for axis, (label, values) in enumerate(zip(['Epsilon', 'Phi', 'Theta', 'Zeta'], sampled)):
+            edges = np.asarray(model.axes[label].edges)
+            bins = np.clip(np.searchsorted(edges, mids[axis], side='right') - 1, 0, len(edges) - 2)
+            expected = np.bincount(bins, weights=prob.sum(axis=tuple(a for a in range(4) if a != axis)),
+                                   minlength=len(edges) - 1) * n
+            counts = np.histogram(values, edges)[0]
+            assert self._chi2_pvalue(counts, expected) > 1e-3, label
+
+    def test_single_photon(self):
+        model = IRFRelativeHistUnpolarized(_make_physical_irf_hist())
+        event = model.random_events(PhotonListWithDirectionAndEnergyInSCFrame(
+            np.array([0.3]), np.array([0.2]), np.array([300.]))[0])
+        assert 300 * 0.5 <= event.energy_keV <= 300 * 1.5
+
+    def test_errors(self):
+        model = IRFRelativeHistUnpolarized(_make_physical_irf_hist())
+        with pytest.raises(ValueError):
+            model.random_events(PhotonListWithDirectionAndEnergyInSCFrame(np.array([0.3]), np.array([0.2]),
+                                                                          np.array([5000.])))
+
+        model = IRFRelativeHistUnpolarized(_make_physical_irf_hist(),
+                                           selections=EnergySelector(u.Quantity([5000., 6000.], u.keV)))
+        with pytest.raises(RuntimeError):
+            model._random_events(PhotonListWithDirectionAndEnergyInSCFrame(np.array([0.3]), np.array([0.2]),
+                                                                           np.array([300.])), max_rounds=10)
