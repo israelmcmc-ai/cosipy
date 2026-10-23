@@ -168,12 +168,20 @@ legibility). Supersedes PRs #15, #26, #27, #28 (closed or to be closed).
   default, HDF5 optional) + rewritten `UnbinnedThreeMLPointSourceResponseTrapz`.
   Real file, 3 h Crab: S/brute 1.0002, per-event median 0.9995 (0.7%
   weighted), 150 s per source position. Notebook `validation/trapz_broadened/`.
-- PR 4 (next): analytic background (prototype `/tmp/claude-0/val/analytic_bkg_b.py`:
-  E^index in Em, uniform phi, isotropic PsiChi in SC, constant rate in live
-  time) and generators (prototype `/tmp/claude-0/val/gen_irf_crab.py`: Ei from
-  livetime x F x Aeff per interval, relative coords by rejection against the
-  IRF's own density with a 3^4 max-filter envelope). Its notebook does the
-  c / closure test with the PR 3 folding. PR 5 not started.
+- PR 4: branch `generators-analytic-bkg` (on PR 3), not opened yet. Done:
+  `IRFRelativeHistUnpolarized._random_events` (rejection, envelope = weighted
+  max-filtered corner tables), `simulate_point_source_events`
+  (`cosipy/source_injector/point_source_events.py`, `direction_at`),
+  `IsotropicPowerLawBackground` (`cosipy/background_estimation/analytic_background.py`),
+  tests, and `validation/closure/closure.ipynb`. Closure result, 3 h Crab, 40
+  realizations: c = 1.0009 +- 0.0015, signal-only unbiased, but with
+  background K -4.5% +- 2.1% and index -0.064 +- 0.022. Hypothesis being
+  tested: attitude change within the 15 s intervals (events generated at the
+  event-time direction, folding at the interval midpoint; ~1 deg per 15 s vs
+  ~1 deg ARM core). Diagnostic run with `direction_at='midpoint'`. If
+  confirmed, the folding needs sub-interval attitude sampling (same samples
+  for s and S). Ask the maintainer before changing the design.
+- PR 5 not started.
 
 ### Deferred
 
