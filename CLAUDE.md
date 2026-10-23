@@ -250,9 +250,15 @@ if it's blocked, say so and validate with synthetic histograms.
 - `UnbinnedThreeMLPointSourceResponseTrapz(data, irf, sc_history, cache, cells,
   mono_nodes=None)`: `F = w g` with `w = E^weight_index` (cache attr, default
   -2) and `g` linear in ln E between nodes = cell edges. Density and `S` use the
-  same nodes and the interval-midpoint attitude (events use the midpoint of
-  their interval too). A dense-Ei folding with event-time attitude for the
-  density and midpoint for `S` had c = 1.006, enough to bias a background fit.
+  same nodes and the same attitude samples: each SC interval is split in
+  sub-intervals of at most `attitude_step` (1 s), sampled at their midpoint;
+  events use their sub-interval's sample, `S` all of them. A dense-Ei folding
+  with event-time attitude for the density and midpoint for `S` had c = 1.006,
+  enough to bias a background fit. Sampling only the 15 s interval midpoints
+  (c = 1 still) biased the 3 h Crab closure with background by K -4.5% +- 2.1%,
+  index -0.064 +- 0.022 (40 realizations; unbiased when the photons were
+  generated at the midpoint): the source moves ~1 deg per 15 s in the SC frame,
+  so the model's ARM is too sharp.
 - `BroadenedIRFCache`: cells in log10 E (level 0 = `cells_per_decade` per
   decade over `energy_range_keV`, each level halves); each cell stores the
   rising `R` (node at its upper edge) and falling `L` (node at its lower edge)

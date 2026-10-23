@@ -7,6 +7,7 @@ from astromodels import DiracDelta, PointSource
 from astromodels.functions.function import CompositeFunction, Function
 from astromodels.sources import Source
 from astropy import units as u
+from astropy.time import Time
 from astropy.units import Quantity
 
 from cosipy import SpacecraftHistory
@@ -31,7 +32,8 @@ class UnbinnedThreeMLPointSourceResponseTrapz(UnbinnedThreeMLSourceResponseInter
                  cells: Sequence[Tuple[int, int]],
                  mono_nodes: Optional[Quantity] = None,
                  batch_size: int = 1_000_000,
-                 offset: Optional[float] = 1e-12):
+                 offset: Optional[float] = 1e-12,
+                 attitude_step: Quantity = 1 * u.s):
         """
         Folds a point source spectrum with the IRF using the same energy nodes, and the
         same spacecraft attitude samples, for the expectation density of the events and
@@ -49,7 +51,8 @@ class UnbinnedThreeMLPointSourceResponseTrapz(UnbinnedThreeMLSourceResponseInter
         where ``Aeff_n,j`` is the selected effective area of the kernel at the attitude
         of interval ``j``, ``r`` is the livetime fraction and ``o`` is zero if the source
         is occulted by the Earth. The attitude is sampled at the midpoint of each interval
-        of ``sc_history``, for ``S`` as well as for the events in that interval. Each
+        of ``sc_history`` (or of each sub-interval of at most ``attitude_step``), for ``S`` as well
+        as for the events in that interval. Each
         piece of a kernel is normalized by the IRF over the selected data space to its
         selected effective area, so the density integrates to exactly ``S`` for any
         spectrum and any grid of cells: the accuracy of the interpolation of ``g`` changes
@@ -87,6 +90,14 @@ class UnbinnedThreeMLPointSourceResponseTrapz(UnbinnedThreeMLSourceResponseInter
         offset : float, optional
             Added to the expectation density of every event, so that events with zero
             response (e.g. Earth occulted) don't result in log(0).
+        attitude_step : Quantity
+            Maximum time between attitude samples. Each interval of ``sc_history`` is
+            split in equal sub-intervals no longer than this, sampled at their midpoint.
+            The source moves in the spacecraft frame within an interval (up to ~1 deg in
+            15 s for a rocking or zenith-pointing spacecraft), and sampling only its
+            midpoint makes the model sharper than the data in angle: with 15 s
+            intervals, a 3 h Crab fit with background was biased by about -5% in flux
+            and -0.06 in index. The cost of finer steps is only in ``S``.
         """
 
         self._source = None
@@ -115,13 +126,28 @@ class UnbinnedThreeMLPointSourceResponseTrapz(UnbinnedThreeMLSourceResponseInter
         self._lon_scatt = asarray(data.scattered_lon_rad_sc, dtype=float)
         self._lat_scatt = asarray(data.scattered_lat_rad_sc, dtype=float)
 
-        obstime = self._sc_ori.obstime
-        self._interval = np.clip(np.searchsorted(obstime.utc.unix, asarray(data.time.utc.unix, dtype=float),
-                                                 side="right") - 1,
-                                 0, self._sc_ori.nintervals - 1)
-        self._livetime_s = np.asarray(self._sc_ori.livetime.to_value(u.s), dtype=float)
-        self._livetime_ratio = self._livetime_s / np.asarray(self._sc_ori.intervals_duration.to_value(u.s), dtype=float)
-        self._sc_ori_mid = self._sc_ori.interp(obstime[:-1] + (obstime[1:] - obstime[:-1]) / 2)
+        # Attitude samples: each interval of the history is split in equal sub-intervals
+        # of at most attitude_step, sampled at their midpoint, with the live time split
+        # in proportion. Events use the sample of their sub-interval, S all of them.
+        start = np.asarray(self._sc_ori.obstime[:-1].utc.unix, dtype=float)
+        duration = np.asarray(self._sc_ori.intervals_duration.to_value(u.s), dtype=float)
+        livetime = np.asarray(self._sc_ori.livetime.to_value(u.s), dtype=float)
+        nsub = np.maximum(np.ceil(duration / attitude_step.to_value(u.s)).astype(int), 1)
+        first = np.concatenate([[0], np.cumsum(nsub)[:-1]])
+
+        interval = np.repeat(np.arange(nsub.size), nsub)
+        position = np.arange(nsub.sum()) - first[interval]
+        sample_time = start[interval] + (position + 0.5) / nsub[interval] * duration[interval]
+
+        self._livetime_s = (livetime / nsub)[interval]
+        self._livetime_ratio = (livetime / duration)[interval]
+        self._sc_ori_mid = self._sc_ori.interp(Time(sample_time, format='unix', scale='utc'))
+
+        event_time = asarray(data.time.utc.unix, dtype=float)
+        event_interval = np.clip(np.searchsorted(start, event_time, side="right") - 1, 0, nsub.size - 1)
+        event_position = np.clip(np.floor((event_time - start[event_interval]) / duration[event_interval]
+                                          * nsub[event_interval]), 0, nsub[event_interval] - 1).astype(int)
+        self._interval = first[event_interval] + event_position
 
         self.clear_cache()
 
