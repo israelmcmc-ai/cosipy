@@ -163,23 +163,17 @@ legibility). Supersedes PRs #15, #26, #27, #28 (closed or to be closed).
   fork `develop` force-synced to `cositools/develop`.
 - PR 2: israelmcmc-ai/cosipy#32 (branch `irf-lazy-loading`, on PR 1), open,
   watched. Validation notebook `validation/irf_lazy_loading/`.
-- PR 3: branch `trapz-broadened` (on PR 2), not opened yet. Done:
-  `cosipy/response/broadened_irf_cache.py` (`BroadenedIRFCache`: pieces stored
-  as one-Ei-bin IRFs in the IRF's own HDF5 format, chunked rows + `computed`
-  mask instead of appendable rows; per-cell Eps' edges = input Eps edges +
-  uniform ln(1+Eps') grid of step min(cell width/16, ln10/64); direct
-  contraction of the normalized table; exact children->parent merge with a
-  content-conserving Eps' rebin; lock file) and the rewritten
-  `UnbinnedThreeMLPointSourceResponseTrapz` in `cosipy/threeml/psr_fixed_ei.py`
-  (maintainer decision: kernels computed on demand in memory by default, the
-  HDF5 file is optional: ~45 MB/pixel on disk, 151 pixels for a 3 h track;
-  computing is ~2x slower than reading)
-  (`cells_for`, `mono_nodes_of`). Tests pass (`tests/response/test_broadened_irf_cache.py`,
-  `tests/threeml/test_psr_trapz.py`). Build the cache from the IRF *without*
-  selections (with selections PR 2 restricts Ei and the cache id differs).
-  Remaining: validation notebook on the real file (accuracy vs brute force,
-  integral of s = S, cache timings), CLAUDE.md notes, open the PR, close #15.
-- PR 4, PR 5: not started.
+- PR 3: israelmcmc-ai/cosipy#33 (branch `trapz-broadened`, on PR 2), open,
+  watched; #15 closed as superseded. `BroadenedIRFCache` (in memory by
+  default, HDF5 optional) + rewritten `UnbinnedThreeMLPointSourceResponseTrapz`.
+  Real file, 3 h Crab: S/brute 1.0002, per-event median 0.9995 (0.7%
+  weighted), 150 s per source position. Notebook `validation/trapz_broadened/`.
+- PR 4 (next): analytic background (prototype `/tmp/claude-0/val/analytic_bkg_b.py`:
+  E^index in Em, uniform phi, isotropic PsiChi in SC, constant rate in live
+  time) and generators (prototype `/tmp/claude-0/val/gen_irf_crab.py`: Ei from
+  livetime x F x Aeff per interval, relative coords by rejection against the
+  IRF's own density with a 3^4 max-filter envelope). Its notebook does the
+  c / closure test with the PR 3 folding. PR 5 not started.
 
 ### Deferred
 
