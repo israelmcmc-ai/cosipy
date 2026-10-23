@@ -295,6 +295,27 @@ if it's blocked, say so and validate with synthetic histograms.
 - Supersedes #15's per-event (Epsilon-driven) nodes; #15's tests were
   replaced. Validation: `validation/trapz_broadened/`.
 
+## Event generators and the analytic background
+
+- `IRFRelativeHistUnpolarized.random_events(photons)` (`self.rng`): one event
+  per photon from the interpolated density, conditional on the selections,
+  by rejection with the true measure `sin(phi+theta)`. Envelope per (Eps,
+  Phi, Theta, Zeta) bin: sum over the photon's NuLambda/Ei corners of each
+  corner table max-filtered over the bin and its neighbors (`_max_table`,
+  cached per corner, Zeta wrapped), times max sin in the bin. ~2 ms/event.
+- `cosipy/source_injector/point_source_events.py`
+  `simulate_point_source_events(irf, sc_history, source)`: Poisson counts per
+  interval from the *selected* area at the interval midpoint (occultation,
+  live time), Ei ~ F Aeff, times uniform, direction at the event time, then
+  `irf.random_events` (conditional on the cut: same as simulating everything
+  and cutting). Continuum spectra only.
+- `cosipy/background_estimation/analytic_background.py`
+  `IsotropicPowerLawBackground`: E^index in Em, uniform phi, isotropic PsiChi
+  (SC), constant rate in live time; density `rate f_live p(Em) / (4 pi^2)`
+  per event, `random_events(sc_history, rate, ...)` from the same model. Use
+  it to measure `c = mean(s / b_norm) / S` over background events (importance
+  sampling) and for closure fits (`validation/closure/`).
+
 ## Validating on real files in a sandbox
 
 - The full hist IRF files hold 9.6 GB of contents. Without
