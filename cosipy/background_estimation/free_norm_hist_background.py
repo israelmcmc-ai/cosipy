@@ -107,11 +107,42 @@ def _gaussian_filter(array: np.ndarray, sigma: float, **kwargs) -> np.ndarray:
     return gaussian_filter1d(array, sigma, **kwargs)
 
 
-def _normalized_density(counts: np.ndarray, widths) -> np.ndarray:
-    """Normalize over the last axis and divide by the bin widths. Empty slices are 0."""
-    total = counts.sum(axis=-1, keepdims=True)
-    return np.divide(counts, total * widths,
-                     out=np.zeros(counts.shape, dtype=float), where=total > 0)
+def _normalized_density(counts: np.ndarray, integral_weights: np.ndarray) -> np.ndarray:
+    """
+    Normalize over the last axis such that the interpolant integrates to 1,
+    with `integral_weights` the integral of the interpolation weight of each
+    bin (see `_interp_integral_weights`). Empty slices are 0.
+    """
+    total = counts @ integral_weights
+    return np.divide(counts, total[..., None],
+                     out=np.zeros(counts.shape, dtype=float), where=total[..., None] > 0)
+
+
+def _interp_integral_weights(axis: Axis, lo: float = None, hi: float = None, nsub: int = 64) -> np.ndarray:
+    """
+    Integral over [`lo`, `hi`] (default: the axis edges) of the interpolation
+    weight of each bin, so that the integral of the interpolant of contents
+    ``v`` is ``v @ weights``. Midpoint rule with `nsub` points between
+    consecutive centers and edges, where the interpolant is linear (in log x
+    for a log axis).
+    """
+    edges = axis.edges
+    lo = edges[0] if lo is None else max(lo, edges[0])
+    hi = edges[-1] if hi is None else min(hi, edges[-1])
+
+    weights = np.zeros(axis.nbins)
+    if hi <= lo:
+        return weights
+
+    knots = np.unique(np.clip(np.concatenate([edges, axis.centers, [lo, hi]]), lo, hi))
+    steps = np.diff(knots) / nsub
+    x = (knots[:-1, None] + steps[:, None] * (np.arange(nsub) + 0.5)).ravel()
+
+    bins, interp = axis.interp_weights(x)
+    for b, w in zip(bins, interp):
+        np.add.at(weights, b, w * np.repeat(steps, nsub))
+
+    return weights
 
 
 class HistBackgroundTemplate:
@@ -420,7 +451,14 @@ class FreeNormHistBackgroundDensity(BackgroundDensityInterface):
     ``phi`` and scattered direction ``PsiChi``, the density of a component is
     ``r(t, Em) * f_live(t) * p(phi | Em, k) * p(PsiChi | Em, phi, k)``, where
     ``k`` is the rocking bin at ``t``. The rate ``r`` is piecewise constant in
-    time and interpolated in ``Em``, and the shapes ``p`` are interpolated.
+    time and interpolated in ``Em``; ``p(phi)`` is interpolated in ``Em`` and
+    ``phi``, and ``p(PsiChi)`` in ``Em`` and ``phi`` and constant within each
+    ``PsiChi`` pixel. Each factor is normalized by the integral of what is
+    evaluated (the interpolant, not the bin contents), and the predicted counts
+    integrate the interpolated rate over the selected ``Em``, so the density
+    integrates exactly to the expected counts. In a background-dominated fit, a
+    mismatch between the two biases the source counts by about the mismatch
+    times the background counts.
     The density is normalized to the counts predicted by the template in the
     analysis window, such that each normalization is the average rate (Hz) of
     the selected events over the livetime of `sc_history`. Its default is the
@@ -568,11 +606,10 @@ class FreeNormHistBackgroundDensity(BackgroundDensityInterface):
         mid_time = (obstime[:-1] + obstime[1:]) / 2
         time_bins = FreeNormHistBackgroundDensity._time_bins(component, mid_time[active])
 
-        edges = _unitless(component.rate_counts.axes['Em'], u.keV).edges
-        ranges = energy_selection.energy_ranges_keV
-        overlap = np.clip(np.minimum(edges[1:, None], ranges[None, :, 1])
-                          - np.maximum(edges[:-1, None], ranges[None, :, 0]),
-                          0, None).sum(axis=1)
+        # Integral of the interpolated rate over the selected Em, as it is evaluated
+        energy_axis = _unitless(component.rate_counts.axes['Em'], u.keV)
+        overlap = sum(_interp_integral_weights(energy_axis, lo, hi)
+                      for lo, hi in energy_selection.energy_ranges_keV)
 
         rate = FreeNormHistBackgroundDensity._rate_per_keV(component)
 
@@ -594,7 +631,7 @@ class FreeNormHistBackgroundDensity(BackgroundDensityInterface):
         axes = [_unitless(component.phi_counts.axes['Em'], u.keV),
                 _unitless(component.phi_counts.axes['Phi'], u.rad)]
 
-        pdf = _normalized_density(component.phi_counts.contents, axes[1].widths)
+        pdf = _normalized_density(component.phi_counts.contents, _interp_integral_weights(axes[1]))
         rocking_bins = cls._rocking_bins(component, rocking)
 
         result = np.empty(len(energy))
@@ -606,19 +643,28 @@ class FreeNormHistBackgroundDensity(BackgroundDensityInterface):
 
     @classmethod
     def _psichi_density(cls, component, rocking, energy, phi, psichi) -> np.ndarray:
-        """p(PsiChi | Em, phi, k) in 1/sr"""
+        """
+        p(PsiChi | Em, phi, k) in 1/sr: interpolated in Em and phi, and constant
+        within each PsiChi pixel (linear interpolation over-smooths the already
+        smoothed maps, and gave a lower likelihood on the DC4 background)
+        """
 
         psichi_axis = component.psichi_counts.axes['PsiChi']
-        axes = [_unitless(component.psichi_counts.axes['Em'], u.keV),
-                _unitless(component.psichi_counts.axes['Phi'], u.rad),
-                psichi_axis]
+        energy_axis = _unitless(component.psichi_counts.axes['Em'], u.keV)
+        phi_axis = _unitless(component.psichi_counts.axes['Phi'], u.rad)
 
-        pdf = _normalized_density(component.psichi_counts.contents, psichi_axis.pixarea().to_value(u.sr))
+        pdf = _normalized_density(component.psichi_counts.contents,
+                                  np.full(psichi_axis.npix, psichi_axis.pixarea().to_value(u.sr)))
         rocking_bins = cls._rocking_bins(component, rocking)
+        pixels = psichi_axis.find_bin(psichi)
 
-        result = np.empty(len(energy))
-        for k in range(pdf.shape[0]):
-            sel = rocking_bins == k
-            result[sel] = Histogram(axes, contents=pdf[k]).interp(energy[sel], phi[sel], psichi[sel])
+        energy_bins, energy_weights = energy_axis.interp_weights(energy)
+        phi_bins, phi_weights = phi_axis.interp_weights(phi)
+
+        result = np.zeros(len(energy))
+        for ie in range(2):
+            for ip in range(2):
+                result += (energy_weights[ie] * phi_weights[ip]
+                           * pdf[rocking_bins, energy_bins[ie], phi_bins[ip], pixels])
 
         return result

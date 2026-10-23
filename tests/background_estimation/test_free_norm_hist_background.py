@@ -1,5 +1,6 @@
 from types import SimpleNamespace
 
+import healpy as hp
 import numpy as np
 import pytest
 import astropy.units as u
@@ -366,6 +367,52 @@ def test_density_integrates_to_one(window):
     # P integrates to 1 over time, so at a fixed time it gives the instantaneous fraction.
     # The rate is constant, so it is f_live(t)/T_live
     assert np.sum(prob * weights) == pytest.approx(1.0 / 3300., rel=0.03)
+
+
+def test_density_integrates_to_expected_counts(window):
+    """
+    Each factor of the density, as evaluated, integrates exactly to what the
+    expected counts assume: the interpolated rate over the selected Em (cut
+    inside the bins), the interpolated p(phi), and p(PsiChi). One factor at a
+    time is non-uniform. At a fixed time in interval 1 (north, f_live = 1) the
+    density integrates to the expected counts per unit livetime.
+    """
+
+    sc_history, template = window
+    total_live = 3300.
+    p_phi = 2 * (np.pi - 1.0) / np.pi ** 2
+
+    def density(energy, phi, lon=0.3, lat=0.2, selection=None):
+        n = np.broadcast(energy, phi, lon).size
+        data = make_data(sc_history, np.full(n, 1500.), energy, phi, lon, lat)
+        bkg = FreeNormHistBackgroundDensity(data, sc_history, template, selection)
+        return np.asarray(bkg.expectation_density()), bkg.expected_counts()
+
+    # Rate: power law in Em
+    centers = np.sqrt(ENERGY_EDGES[1:] * ENERGY_EDGES[:-1])
+    template.rate_counts[...] = template.rate_counts.contents * (centers / 100.) ** -2.5
+    edges = np.geomspace(250., 850., 20001)
+    values, counts = density(np.sqrt(edges[1:] * edges[:-1]), 1.0,
+                             selection=EnergySelector(u.Quantity([[250., 850.]], u.keV)))
+    assert np.sum(values * np.diff(edges)) / (p_phi / (4 * np.pi)) * total_live == pytest.approx(counts, rel=1e-5)
+
+    # p(phi): not linear, between Em centers
+    reference, _ = density(400., 1.0)
+    template.phi_counts[...] = np.sin(template.phi_counts.axes['Phi'].centers) ** 2 + 0.1
+    edges = np.linspace(0, np.pi, 20001)
+    values, _ = density(400., (edges[1:] + edges[:-1]) / 2)
+    assert np.sum(values * np.diff(edges)) == pytest.approx(reference[0] / p_phi, rel=1e-6)
+
+    # p(PsiChi): not uniform, constant within pixels, on a finer grid
+    psichi_axis = template.psichi_counts.axes['PsiChi']
+    x, _, z = psichi_axis.pix2vec(np.arange(psichi_axis.npix))
+    template.psichi_counts[...] = (1 + 0.5 * z + 0.3 * x ** 2) * np.ones(template.psichi_counts.shape)
+    nside = 4 * psichi_axis.nside
+    colat, lon = hp.pix2ang(nside, np.arange(hp.nside2npix(nside)))
+    values, _ = density(400., 1.0, lon, np.pi / 2 - colat)
+    template.psichi_counts[...] = 1.
+    uniform, _ = density(400., 1.0)
+    assert np.sum(values) * hp.nside2pixarea(nside) == pytest.approx(uniform[0] * 4 * np.pi, rel=1e-9)
 
 
 def test_energy_selection(window):

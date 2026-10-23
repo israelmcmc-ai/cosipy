@@ -348,6 +348,16 @@ if it's blocked, say so and validate with synthetic histograms.
 - 3-month DC4 mock templates (all events / Distance >= 1 cm) are on Wasabi under
   `COSI-SMEX/develop/Data/Products_and_Templates/Background_Models/HistBackgroundTemplate/`,
   built with `cosipy/background_estimation/scripts/HistBackgroundTemplate/`.
+- The density integrates exactly to the expected counts B: the Em rate and
+  p(phi) are normalized by the integral of their interpolants
+  (`_interp_integral_weights`) and B integrates the interpolated rate over the
+  cut; p(PsiChi) is constant within each pixel (nearest). Before, the
+  interpolants were normalized as bin densities: B was off by +0.16% (Em) and
+  p(phi) by +-0.15%, i.e. ~10% of the 3 h Crab counts (bias ~ delta B / S).
+  Nearest everywhere was considered (exact by construction) but costs 575 in
+  logL on the 119k DC4 background events of the Crab window (Em -279, phi
+  -440, PsiChi +144), so only PsiChi is nearest. The 15 s attitude intervals
+  never straddle the 300 s template time bins.
 - Smoothing was chosen by cross-validation (template from a random half of the events,
   log-likelihood of the other half in 1 h windows): `psichi_fwhm=4 deg`,
   `phi_fwhm=20 deg`, `time_counts=500`. Use that, not eyeballing, to retune.
