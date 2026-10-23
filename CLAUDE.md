@@ -178,9 +178,21 @@ legibility). Supersedes PRs #15, #26, #27, #28 (closed or to be closed).
   +0.004 +- 0.003. (Seeds 0-39 alone gave -5% / -0.06: a fluctuation.)
 - Found on the way: SLERP bug in `SpacecraftHistory._interp_attitude`
   (doubled angle, no q/-q flip; 0.24% of DC4 intervals garbage near their
-  midpoint): israelmcmc-ai/cosipy#34 against `develop`, cherry-picked into
-  the PR 4 branch.
-- PR 5 not started.
+  midpoint): israelmcmc-ai/cosipy#34, merged upstream as cositools/cosipy#667
+  (#34 closed); cherry-picked into the PR 4 branch.
+- PR 5: branch `hist-bkg-crab` (PR 4 branch + #23 merged), not opened yet.
+  Done: hist background density integrates exactly to B (Em rate and p(phi)
+  normalized by their interpolant integrals, nearest-pixel PsiChi, as the
+  user chose; before: +0.16% Em, +-0.15% phi), test; GRB/Crab tutorials
+  switched to Trapz + BroadenedIRFCache (not executed yet). In progress:
+  `validation/crab_hist_background/` (source in the scratchpad
+  `pr5/crab_src.py`): Crab fits in 7 3 h windows (2028-03-23 + 6 spread
+  over the 3 months; true background extracted to
+  `/home/user/dc4data/windows/bkg_<unix start>.npz`), signal only vs bkg-only
+  template vs all-events template (+ mock data in the first window), with
+  Hessian errors, pulls and sum(s/b)/S over the true background. First
+  window: K -50% (bkg-only template), but sum(s/b)/S = 0.985 +- 0.009, so
+  likely a ~2 sigma fluctuation; per-energy-band norms didn't change it.
 
 ### Deferred
 
