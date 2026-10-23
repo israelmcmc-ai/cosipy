@@ -88,3 +88,15 @@ def test_counts_energies_and_times(sc_history, selection):
     if selection is not None:
         em = np.asarray(data.energy_keV)
         assert np.all((em >= selection[0]) & (em < selection[1]))
+
+
+def test_direction_at_the_midpoint(sc_history):
+    irf = make_irf()
+    source = PointSource('src', l=0, b=0, spectral_shape=Powerlaw(K=4e-5, index=-2, piv=100))
+
+    data, _ = simulate_point_source_events(irf, sc_history, source, (100., 1000.), rng=np.random.default_rng(4),
+                                           direction_at='midpoint')
+    assert data.nevents > 0
+
+    with pytest.raises(ValueError):
+        simulate_point_source_events(irf, sc_history, source, (100., 1000.), direction_at='start')

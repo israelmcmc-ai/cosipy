@@ -17,7 +17,8 @@ def simulate_point_source_events(irf: FarFieldSpectralInstrumentResponseFunction
                                  energy_range_keV: Tuple[float, float] = (100., 10_000.),
                                  nenergy: int = 4001,
                                  rng: np.random.Generator = None,
-                                 batch_size: int = 1_000_000) -> Tuple[TimeTagEmCDSEventDataInSCFrameFromArrays,
+                                 batch_size: int = 1_000_000,
+                                 direction_at: str = 'event') -> Tuple[TimeTagEmCDSEventDataInSCFrameFromArrays,
                                                                        np.ndarray]:
     """
     Events of a point source with a continuum spectrum, drawn from the IRF.
@@ -48,6 +49,9 @@ def simulate_point_source_events(irf: FarFieldSpectralInstrumentResponseFunction
     rng : numpy.random.Generator, optional
     batch_size : int
         Maximum number of IRF evaluations per call.
+    direction_at : {'event', 'midpoint'}
+        Source direction of each photon: at its time (default, the physical one), or at
+        the midpoint of its interval, which is what the folding assumes.
 
     Returns
     -------
@@ -112,9 +116,15 @@ def simulate_point_source_events(irf: FarFieldSpectralInstrumentResponseFunction
         empty = np.zeros(0)
         return TimeTagEmCDSEventDataInSCFrameFromArrays(time.jd1, time.jd2, empty, empty, empty, empty), empty
 
-    event_coord = sc_history.interp(time).get_target_in_sc_frame(coord)
-    events = irf.random_events(PhotonListWithDirectionAndEnergyInSCFrame(
-        np.asarray(event_coord.lon.rad, dtype=float), np.asarray(event_coord.lat.rad, dtype=float), photon_energy))
+    if direction_at == 'event':
+        event_coord = sc_history.interp(time).get_target_in_sc_frame(coord)
+        event_lon, event_lat = np.asarray(event_coord.lon.rad, dtype=float), np.asarray(event_coord.lat.rad, dtype=float)
+    elif direction_at == 'midpoint':
+        event_lon, event_lat = lon[interval[order]], lat[interval[order]]
+    else:
+        raise ValueError(f"direction_at must be 'event' or 'midpoint', got {direction_at!r}")
+
+    events = irf.random_events(PhotonListWithDirectionAndEnergyInSCFrame(event_lon, event_lat, photon_energy))
 
     data = TimeTagEmCDSEventDataInSCFrameFromArrays(time.jd1, time.jd2,
                                                     *(np.asarray(a, dtype=float) for a in
