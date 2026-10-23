@@ -251,3 +251,37 @@ def test_cells_must_tile_the_range(irf_file, cache_file, data, sc_history):
         UnbinnedThreeMLPointSourceResponseTrapz(data, irf, sc_history, cache, [(1, 0)])
     with pytest.raises(ValueError):
         UnbinnedThreeMLPointSourceResponseTrapz(data, irf, sc_history, cache, [(1, 0), (1, 1), (2, 3)])
+
+
+def test_attitude_samples(irf_file, cache_file, data):
+    """Each interval is split in equal sub-intervals of at most attitude_step, sampled at
+    their midpoint, with the live time split in proportion; each event uses its own."""
+
+    sc = MagicMock(spec=SpacecraftHistory)
+    sc.obstime = Time([1000., 1012., 1013.], format='unix')
+    sc.nintervals = 2
+    sc.livetime = [9., 0.5] * u.s
+    sc.intervals_duration = [12., 1.] * u.s
+    sampled = []
+
+    def interp(times):
+        sampled.append(times.unix)
+        mock = MagicMock()
+        mock.get_target_in_sc_frame.return_value = SkyCoord(lon=np.full(times.size, LON),
+                                                            lat=np.full(times.size, LAT), unit='rad',
+                                                            frame=SpacecraftFrame())
+        mock.get_earth_occ.return_value = np.zeros(times.size, dtype=bool)
+        return mock
+
+    sc.interp.side_effect = interp
+    data.time.utc.unix = np.array([1000.1, 1003.9, 1004.1, 1011.9, 1012.5, 1000., 1008.])
+
+    irf = IRFRelativeHistUnpolarized.from_h5(irf_file)
+    psr = UnbinnedThreeMLPointSourceResponseTrapz(data, irf, sc, make_cache(irf_file, cache_file), [(0, 0)],
+                                                  attitude_step=5 * u.s)
+
+    # 12 s -> 3 sub-intervals of 4 s; 1 s -> 1
+    np.testing.assert_allclose(sampled[0], [1002., 1006., 1010., 1012.5])
+    np.testing.assert_allclose(psr._livetime_s, [3., 3., 3., 0.5])
+    np.testing.assert_allclose(psr._livetime_ratio, [0.75, 0.75, 0.75, 0.5])
+    np.testing.assert_array_equal(psr._interval, [0, 0, 1, 2, 3, 0, 2])
