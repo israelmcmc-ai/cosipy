@@ -33,6 +33,189 @@ histogram-based background (`FreeNormHistBackgroundDensity`).
   get reverted. Verify a change actually moves the needle before adding
   complexity.
 
+## Current plan: IRF / folding / background cleanup (started Oct 2026)
+
+Goal: unbiased point-source fits with the relative hist IRF and a data-driven
+background, with clean, human-maintainable code (up to ~50% slower is fine for
+legibility). Supersedes PRs #15, #26, #27, #28 (closed or to be closed).
+
+### Process
+
+- One main feature per PR, all **against `develop_israel`**, opened in order
+  (later PRs include earlier commits until those merge). Each PR comes with
+  meaningful unit tests and an example notebook in a separate validation
+  folder (not `docs/tutorials`). Only the GRB and Crab fits go in the
+  tutorials.
+- Sonnet subagents may implement well-specified pieces (tests, notebooks,
+  lazy loading, generators); review their output. Keep the normalization math
+  and the cache format in the main session.
+- If something unexpected comes up, ask the maintainer instead of assuming.
+
+### Why (findings that motivated this)
+
+- With a dominant background, the unbinned likelihood amplifies any mismatch
+  c = (integral of the source density over the selected data space) / S
+  (expected counts): dK/K ~ 10 (c - 1) for the 3 h Crab. Signal-only fits are
+  immune (K = N/S). Measure c through the whole pipeline with background
+  events from a known density as importance samples: c = mean(s/b_norm) / S.
+- Closure test (Crab events sampled from the IRF itself, analytic ideal
+  background, 40 realizations, 23 March 2028 3 h window): Trapz (#15) gave
+  c = 1.008 and K +12%; Adaptive c = 0.997 with an energy tilt and K +11%
+  (index +0.15). Same Ei nodes for density and S (#28) gave c = 0.9994 and
+  K unbiased at fixed index; real Crab 7 windows: bkg - signal-only
+  K = +0.10 +- 0.11 (was +0.26/+0.34).
+- Even a dense-Ei folding had c = 1.006 when the density used event-time
+  attitude and S used interval midpoints; using the midpoint attitude for both
+  removed it.
+
+### PR 1: Hist IRF normalization (`relative_irf_hist.py`)
+
+- Normalize the event probability in `__init__` so the *interpolated*
+  density integrates to 1 with the true measure
+  `Ei dEps sin(phi+theta) dphi dtheta dzeta` (sub-binned phi/theta weights,
+  exact zeta hats).
+- Ei correction of the Eps -> Em conversion: store the table per unit Eps
+  times the Ei center, divide by the photon energy when evaluating.
+- Em selections: selected fraction from the same interpolated table
+  (closed-form hat cumulatives in Eps, same NuLambda/Ei weights).
+- No nearest-neighbor mode.
+- Use histpy `fill_value` (israelmcmc-ai/histpy#1, install from its branch):
+  - Eps: fill_value=0 with extrapolate=True (linear ramp to 0 at the Eps
+    edges, 0 beyond; without extrapolate, values beyond return NaN). The
+    current code clamps flat beyond the outer centers and masks outside the
+    edges, so the edge-bin hat integrals and the selected fraction change;
+    derive and test.
+  - Zeta: fill_value='periodic' (wraps; between the last and first bin
+    centers it interpolates across 2pi), so every Zeta hat integrates to its
+    bin width and the old `% 2pi` wrapping/clamping workaround goes away.
+  - Other axes keep the default clamping unless a test shows otherwise.
+  - If it works, the maintainer releases histpy and we bump the cosipy
+    requirement.
+
+### PR 2: Lazy loading of the hist IRF
+
+- `__init__` takes a `Histogram` or an HDF5 reference (filename + groups);
+  `from_h5` passes the reference with `preload=False` by default.
+- Unit of loading: one NuLambda pixel row within the Ei range (partial Ei
+  load under selections moves here too). All per-(pixel, Ei) setup
+  (phase-space division, normalization, marginals) happens per row on load.
+- Full-size `np.zeros` contents (pages committed lazily) + loaded mask; one
+  `_ensure_loaded` choke point used by every evaluation path, plus a guard
+  that no weight falls on an unloaded row. Never touch all rows in `__init__`.
+- Open the file per load (picklable, fork-safe). `preload=True` reads all.
+- histpy#1 also adds partial-sky `HealpixAxis` support (fill_value for
+  uncovered pixels); consider it as an alternative to the full-size array if
+  it turns out simpler.
+
+### PR 3: Trapz folding with shared nodes and a hierarchical broadening cache
+
+- Fresh PR superseding #15 (work on top of its Trapz). Modify
+  `UnbinnedThreeMLPointSourceResponseTrapz`, don't add a new class.
+- Density and S use the same Ei nodes and the interval-midpoint attitude,
+  so their consistency is analytic.
+- Broadening: F = w g with w = E^-2; g interpolated with hats linear in ln E
+  (`energy_degree = 1`). Cells in log10 E: level 0 = one per decade from the
+  root (default 100 keV - 10 MeV, user-overridable), level l splits in 2^l.
+  Each cell stores rising/falling half-hat pieces R, L (un-normalized
+  integrals); a node kernel is R of the cell below + L of the cell above.
+  Parent pieces are exact weighted sums of the children's (1/2, 1, 1/2),
+  with a 1D resample of the Eps' axis. Eps' = Em/E_lo - 1, binning from a
+  rule per cell width, floored by the input axes.
+- HDF5 layout: `BROADENED/` root attrs (energy range, weight index,
+  energy_degree, direction_degree, axes rule + floor axes, pol convention,
+  parent_irf_id, version); `e{level}/c{index}/point/` with `pixels`, R, L and
+  `aeff_pixels`, AEFF_R, AEFF_L (sparse appendable rows, `complete` attr).
+  Reserve `hp{order}/` (NESTED, pixel-integrated, isotropic weight,
+  `direction_degree` 0 or 1) for extended sources; don't implement yet.
+  The IRF depends on Zeta, so any change of reference direction (pixel
+  center, child to parent) must go through the pol convention's basis.
+- Filled on demand (pixels the track needs, cells the grid needs) plus an
+  option to precompute all directions down to a cell level. Cache path
+  chosen by the user (may be the IRF file). Rows written before appending to
+  `pixels` (crash-safe); single writer with a lock file.
+- Grid chosen once before the fit by refining cells until
+  (Delta^2/8)|d^2 g/d(ln E)^2|/g is below a target; fixed during the fit.
+- Lines (mono nodes) with the original IRF; drop point-evaluated fine regions
+  (they undersample the ~0.4% photopeak).
+- The IRF is generic: accept the axes as input (the hist IRF passes its own).
+
+### PR 4: Ideal analytic background and event generators (main package)
+
+- Analytic `BackgroundDensityInterface` (power law in Em, uniform phi,
+  isotropic PsiChi, constant rate in livetime) and its event sampler.
+- `IRFRelativeHistUnpolarized.random_events` (rejection sampling against the
+  IRF's own density) and a point-source event simulator (exposure x spectrum).
+- Example notebook: closure test.
+
+### PR 5: Histogram background (on #23) and the Crab fits
+
+- Check the background model's own consistency (integral of b = B).
+- Crab fits on the mock data, 3 h windows (the 3-month fit is dropped: 98M
+  events after the distance cut, too much for an unbinned fold here): signal-only,
+  ideal background, histogram background (template from bkg only and from all
+  events). Update the GRB and Crab tutorials.
+
+### Status (update as PRs progress)
+
+**Sessions (split on 2026-10-24).** One session follows the open PRs #31, #32,
+#33, #35 (and the plan PR #29); the original session keeps PR 5 and the
+background investigation, because those need the data on its disk (IRF,
+templates, true background per window). The PR session needs only GitHub and
+git:
+- Subscribe to #31, #32, #33, #35 and answer reviews / fix CI per the usual
+  drive-to-green rules. The PRs are stacked: #32 contains #31, #33 contains
+  #32, #35 contains #33. A change to #31 is merged forward with merge commits
+  (`irf-normalization` -> `irf-lazy-loading` -> `trapz-broadened` ->
+  `generators-analytic-bkg`), never rebased; also into `hist-bkg-crab` (PR 5)
+  if it touches files PR 5 changes.
+- Commits end with the `Co-Authored-By` / `Claude-Session` trailers; PR bodies
+  with the "Generated with Claude Code" line and the session URL; GitHub
+  comments with the `Generated by Claude Code` footer. No model IDs anywhere.
+- Validation notebooks need the real files; the PR session can't rerun them.
+  Ask the user (or leave a note here) if a review needs that.
+- Don't touch `hist-bkg-crab` / `bkg-investigation` beyond those forward merges.
+
+- PR 1: israelmcmc-ai/cosipy#31 (branch `irf-normalization`), open.
+  Validation notebook `validation/irf_normalization/`. histpy pinned to the
+  burstcube GitLab branch `claude/determined-ride-20as3h` until released (then
+  bump `pyproject.toml` to the release). Latest: docstring of
+  `_differential_effective_area_cm2` explains why the area is kept unselected
+  (asked by the user), merged forward.
+- Side fix `to_relative` arccos clip: merged upstream (cositools/cosipy#666);
+  fork `develop` force-synced to `cositools/develop`.
+- PR 2: israelmcmc-ai/cosipy#32 (branch `irf-lazy-loading`, on PR 1), open.
+  Validation notebook `validation/irf_lazy_loading/`.
+- PR 3: israelmcmc-ai/cosipy#33 (branch `trapz-broadened`, on PR 2), open;
+  #15 closed as superseded. `BroadenedIRFCache` (in memory by default, HDF5
+  optional) + rewritten `UnbinnedThreeMLPointSourceResponseTrapz`. Real file,
+  3 h Crab: S/brute 1.0002, per-event median 0.9995 (0.7% weighted), 150 s per
+  source position. Notebook `validation/trapz_broadened/`.
+- PR 4: israelmcmc-ai/cosipy#35 (branch `generators-analytic-bkg`, on PR 3),
+  open. `IRFRelativeHistUnpolarized._random_events`,
+  `simulate_point_source_events`, `IsotropicPowerLawBackground`, tests,
+  `validation/closure/closure.ipynb` (80 realizations, seeds 0-79). 3 h Crab:
+  c = 1.0000 +- 0.0011; with background K -1.0% +- 1.7%, index -0.013 +-
+  0.018; signal only +0.3% +- 0.3%. Includes the SLERP fix, merged upstream
+  as cositools/cosipy#667 (#34 closed).
+- PR 5 (original session): branch `hist-bkg-crab` (PR 4 branch + #23), not
+  opened. Done: the hist background density integrates exactly to B (Em rate
+  and p(phi) normalized by their interpolant integrals, nearest-pixel PsiChi);
+  GRB/Crab tutorials switched to Trapz + BroadenedIRFCache (not executed);
+  `validation/crab_hist_background/` (7 3 h windows). Finding: the Crab fits
+  with the histogram background are biased ~-50% in K with the norm free or
+  fixed (even fixed at the true count), because the template overpredicts the
+  background by ~2% where the Crab is (`sum(s/b)/S` = 0.98 over the true
+  background); needed: a few 0.1%. Smoothing and per-energy norms don't help.
+  The user is investigating the background before deciding; diagnostics on
+  branch `bkg-investigation` (`validation/crab_hist_background/diagnostics/`).
+- The 3-month Crab fit was dropped (98M events, too much for this sandbox).
+
+### Deferred
+
+- Adaptive folding: leave out.
+- hist_nn: leave out; come back to it if hist_simple doesn't work.
+- Extended sources (`hp{order}` tables), memory-capped LRU eviction.
+
 ## Python version for the tests
 
 - cosipy requires Python >= 3.12 (`pyproject.toml`), but the sandbox's default
