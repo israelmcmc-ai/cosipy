@@ -6,10 +6,12 @@ for a source direction uniformly distributed over the sphere: B(w) = sin(w) * SI
 Bins: E tra_quality.E_EDGES (6); LA 0..30 cm in 0.25 cm (120, the last holds all larger values); SQ 2,3,4,5,6,7+ (6); categories 12 x 12.
 Usage: <stream> | python bkg_quality.py out.npz
 """
+import os
 import sys
 import numpy as np
 from tra_quality import derive, E_EDGES
 
+DISTVAR = os.environ.get('DISTVAR', 'd01')    # d01 = |hit2 - hit1| (the FITS Distance, MEGAlib FirstLeverArm); LA = minimum consecutive hop
 NL, NS, NC = 120, 6, 12
 CHUNK = 64 * 2**20
 N = np.zeros((6, NL, NS, NC, NC)); SIN = np.zeros_like(N)
@@ -27,7 +29,7 @@ while True:
         n_in += len(a)
         d = derive(a)
         iE = np.digitize(d['E'], E_EDGES) - 1
-        iL = np.clip((d['LA'] / 0.25).astype(int), 0, NL - 1)
+        iL = np.clip((d[DISTVAR] / 0.25).astype(int), 0, NL - 1)
         iS = np.clip(d['sq'].astype(int), 2, 7) - 2
         flat = (((iE * NL + iL) * NS + iS) * NC + d['cat1']) * NC + d['cat2']
         N += np.bincount(flat, minlength=N.size).reshape(N.shape)

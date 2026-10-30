@@ -15,11 +15,11 @@ expert (the user) that is consistent with the data but not independently proven 
 - Storage: Wasabi bucket `cosi-pipeline-public` (endpoint `https://s3.us-west-1.wasabisys.com`; the access keys are public, in the
   `cosi-data-challenges/data-products/README.md`). 3 months of data: TimeTags 1835487300 to 1843467255 s (GPS), week 1 = 1835487300 to 1836092100.
 - **FITS event files** (mock dataset weekly files, every component, the Crab) have exactly 11 columns: `Energies` [keV], `TimeTags` [s],
-  `Xpointings/Ypointings/Zpointings (glon,glat)` [rad], `Phi` [rad], `Chi local`, `Psi local` [rad], `Distance` [cm] (= the `.tra` `LA` lever arm: the minimum distance between consecutive hits of the reconstructed Compton sequence, which equals the first-to-second-hit distance only for 2-hit events),
+  `Xpointings/Ypointings/Zpointings (glon,glat)` [rad], `Phi` [rad], `Chi local`, `Psi local` [rad], `Distance` [cm] (= |hit2 - hit1|, the first-to-second-hit distance = MEGAlib `FirstLeverArm()`; [verified] by matching 1270 events of a week-1 `.tra` and the FITS file by time and energy: FITS `Distance` == |hit2 - hit1| for all of them, and != `LA` for the 28% with 3+ hits),
   `Chi galactic`, `Psi galactic` [deg]. They do **not** contain the number of hits, hit positions, depths, or the true photon direction.
 - **`.tra` files** (`COSI-SMEX/DC4/Data/Backgrounds/Trafile/*.extracted.filtered.tra.gz`, backgrounds only; none for the Crab or any source) contain per event:
   `ID`, `TI` (time), `GX/GZ` (pointing of the x and z axes, Galactic deg), `SQ` (number of hits), `CE` (energies), `CD` (positions of the first and
-  second hit with errors), `LA` (lever arm = minimum consecutive-hop distance of the Compton sequence = FITS `Distance`; equal to |hit2 - hit1| only for 2-hit events), and one `CH n x y z E ...` line per hit (`CH 0` = first hit,
+  second hit with errors), `LA` (lever arm = MEGAlib `LeverArm()` = the minimum consecutive-hop distance of the Compton sequence; NOT the FITS `Distance`: it equals |hit2 - hit1| only for 2-hit events and is used by mimrec's "Any lever arm" cut), and one `CH n x y z E ...` line per hit (`CH 0` = first hit,
   `CH 1` = second hit of the Compton sequence). Positions are in cm in the payload frame (see 1.3). Average 2.48 hits/event. **No true direction** is stored; there are no
   `.sim` files for cosmic photons or Galactic diffuse (DC4 has `.sim` only for albedo photons and primary protons), and diffuse sources have no single direction anyway.
 - **Each `.tra` is a concatenation of increments (about 120k events each) and every increment spans the full 3 months**, so the events of one week are
@@ -68,7 +68,7 @@ material shielding: it is not needed.) [verified] (a) the spike occupies the sin
 **Gotcha**: the dips are wider than one HEALPix nside-32 pixel at small Distance (+-3.3 deg for 1-2 cm), so templates for a background model must be built with the same quality cuts as the data and cannot be smooth near the axes. Figures: `figures_dist1cm/sc_longitude_spike_{fold90,vs_distance}.png`.
 
 **Feature 3. For Distance > 8 cm the axis dips turn into broad maxima along x and y (not along the diagonals, where the most material is).** [expert, verified] 8 cm is about the size of one detector, so most first-second-hit pairs must be in different towers:
-[caveat: the `.tra` hit-pair numbers below select on |hit2 - hit1| > 8 cm, not on LA = the minimum consecutive hop (= the FITS Distance); for events with more than 2 hits the two selections differ, so these fractions are approximate until re-run with an LA cut.] 89% of the events (|hit2 - hit1| > 8 cm) have the two hits in different detectors (same / x-neighbour / y-neighbour / diagonal: 11 / 32 / 34 / 23%) against 7% without the cut. Neighbouring towers along x and y are closer than diagonal ones, the number of events falls steeply with distance,
+89% of the events (Distance > 8 cm) have the two hits in different detectors (same / x-neighbour / y-neighbour / diagonal: 11 / 32 / 34 / 23%) against 7% without the cut. Neighbouring towers along x and y are closer than diagonal ones, the number of events falls steeply with distance,
 and the cut sits at the steep part, so the axis neighbours (separations 8-10 cm) dominate; diagonal pairs are present but subdominant (their azimuth peaks at about +-50 and +-130 deg because the gaps differ in x and y). The first and second hits concentrate on the detector edges facing the gaps
 (34.9% of the first hits within 1.5 cm of the y-gap edges vs 22.0% without the cut, area 21%; 25.2% vs 20.5% for the x-gap edges); the (dx, dy) displacement map is a ring of radius ~8.5-9 cm (the cut) with hot spots on the axes. A pure geometry Monte Carlo (uniform hits in the 2 x 2 layout,
 weight exp(-rho/lambda)/rho^2, rho > 8 cm) reproduces the four axis maxima and the diagonal minima, but over-weights x-neighbours (50-56% vs 32%) and under-weights diagonal and same-detector pairs because it ignores the vertical separation (the data have dz peaks at multiples of the 2.56 cm layer spacing). In the limit of far-apart
@@ -159,7 +159,7 @@ Needs numpy, astropy, healpy, matplotlib (it does not use cosipy itself).
 Longitude increases to the left for Galactic and spacecraft (sky view) and to the right for the Earth frame (azimuth).
 Slice choices (`E_SLICES`, `PHI_SLICES`, `SLICE_DIRS`, `DISK_RADIUS`) are at the top of `plot_dc4.py`.
 
-## With a minimum Distance (lever arm LA) cut
+## With a minimum Distance (= |hit2 - hit1|) cut
 `figures_dist1cm/` has the same plots after requiring the event `Distance` column >= 1 cm
 (`python bin_dc4.py ... week1_hist_d1cm.npz 32 1.0`). This keeps 57% of the week-1 events
 (27% in the 100-158 keV bin, about 75% above 1 MeV).

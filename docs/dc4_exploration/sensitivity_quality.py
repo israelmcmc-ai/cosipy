@@ -1,4 +1,4 @@
-"""S/sqrt(B) vs event quality cuts (Distance = lever arm LA, number of hits, depth of the first / second hit), with the ARM window optimised.
+"""S/sqrt(B) vs event quality cuts (Distance = |hit2 - hit1| = the FITS Distance (env DISTVAR=LA: minimum consecutive hop), number of hits, depth of the first / second hit), with the ARM window optimised.
 
 Signal: isotropic far-field simulations with true direction (signal.npz files of resp_signal.py), weighted with E_true^-GAMMA (Crab-like).
         ARM per event = angle(true direction, scattered direction) - Compton angle.
@@ -12,6 +12,7 @@ import numpy as np
 from tra_quality import E_EDGES
 
 NL, NS, NC, NE = 120, 6, 12, 6
+DISTVAR = os.environ.get('DISTVAR', 'd01')   # must match the variable the background was binned in
 DL = 0.25                      # cm, LA bin
 DA = 0.5                       # deg, ARM bin
 NA = 60                        # ARM bins 0..30 deg
@@ -35,7 +36,7 @@ def signal_hist(files, gamma=GAMMA, theta_max=None):
         if theta_max is not None:
             ok &= z['theta_src'] < theta_max
         iE = np.digitize(E, E_EDGES) - 1
-        iL = np.clip((z['LA'] / DL).astype(int), 0, NL - 1)
+        iL = np.clip((z[DISTVAR] / DL).astype(int), 0, NL - 1)
         iS = np.clip(z['sq'].astype(int), 2, 7) - 2
         iA = np.clip((arm / DA).astype(int), 0, NA)
         flat = ((((iE * NL + iL) * NS + iS) * NC + z['cat1']) * NC + z['cat2']) * (NA + 1) + iA
