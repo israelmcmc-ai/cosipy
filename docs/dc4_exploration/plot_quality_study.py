@@ -94,12 +94,12 @@ def scan_plot(cuts, xvals, xlabel, fname, title, xticklabels=None, logx=False):
     fig.suptitle(title); fig.tight_layout(); fig.savefig(os.path.join(outdir, fname), dpi=100); plt.close(fig)
     return res
 
-# ---------------------------------------------------------------- 1. Distance (lever arm LA)
+# ---------------------------------------------------------------- 1. Distance (first lever arm = |hit2 - hit1| = FITS Distance)
 las = [0, 0.25, 0.5, 0.75, 1, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10]
-res_la = scan_plot([Cut(la_min=v) for v in las], las, 'minimum Distance (lever arm LA = minimum consecutive hop) [cm]', 'quality_distance.png',
+res_la = scan_plot([Cut(la_min=v) for v in las], las, 'minimum Distance = first-to-second-hit distance [cm]', 'quality_distance.png',
                    'S/√B vs the minimum Distance cut (ARM window re-optimised), sky-averaged signal vs week-1 background')
 sel = [las.index(v) for v in (0.5, 1, 2, 5, 8)]
-table('S/√B change vs minimum Distance (LA), ARM window re-optimised [%] (± jackknife over the 10 signal files); last rows: all bins in quadrature and background removed',
+table('S/√B change vs minimum Distance, ARM window re-optimised [%] (± jackknife over the 10 signal files); last rows: all bins in quadrature and background removed',
       [[f'{las[j]:g} cm'] + [fmt(res_la[j]['ch'][i], res_la[j]['err'][i]) for i in range(NE)] + [fmt(res_la[j]['cc'], res_la[j]['cerr']), f'{100 * res_la[j]["removed"].mean():.0f}'] for j in sel],
       ['cut'] + LAB + ['all bins', 'mean bkg removed [%]'])
 
@@ -147,7 +147,7 @@ tab = np.zeros((len(combos), NE)); comb = np.zeros(len(combos)); rem = np.zeros(
 for n, (la, sq, lay, dq) in enumerate(combos):
     r = fom(Cut(la_min=la, sq_max=sq, layers1=lay[1], excl1=dq[1], excl2=dq[2]), Hc, bN, bS)
     tab[n] = 100 * (r['fom'] / base['fom'] - 1); comb[n] = 100 * (combined(r['fom']) / combined(base['fom']) - 1); rem[n] = 1 - r['Bn'] / base['Bn']; wopt[n] = r['w']
-name = lambda c: f'LA ≥ {c[0]:g}, SQ ≤ {c[1]}, 1st-hit layer {c[2][0]}, depth: {c[3][0]}'
+name = lambda c: f'D ≥ {c[0]:g}, SQ ≤ {c[1]}, 1st-hit layer {c[2][0]}, depth: {c[3][0]}'
 order = np.argsort(-comb)
 table('Best combinations over all 1200 (all bins in quadrature, one common cut for all energies)',
       [[name(combos[n]), f'{comb[n]:+.1f}'] + [f'{tab[n, i]:+.1f}' for i in range(NE)] for n in order[:8]], ['combination', 'all bins'] + LAB)
@@ -155,7 +155,7 @@ best_bin = [int(np.argmax(tab[:, i])) for i in range(NE)]
 table('Best combination for each energy bin separately (cuts could be energy dependent)',
       [[LAB[i], name(combos[best_bin[i]]), f'{tab[best_bin[i], i]:+.1f}', f'{100 * rem[best_bin[i], i]:.0f}', f'{wopt[best_bin[i], i]:g}'] for i in range(NE)],
       ['energy bin', 'combination', 'S/√B change [%]', 'bkg removed [%]', 'optimal w [deg]'])
-# heatmaps LA x max hits, no depth cut
+# heatmaps Distance x max hits, no depth cut
 fig, axs = plt.subplots(2, 3, figsize=(17, 8.5))
 for i, ax in enumerate(axs.flat):
     M = np.array([[change(Cut(la_min=la, sq_max=sq), with_err=False)['ch'][i] for la in LAs] for sq in SQs])
@@ -176,7 +176,7 @@ fig.suptitle('All 1200 cut combinations: S/√B change vs fraction of background
 def w68(cut):
     S = cut.apply_sig(Hc).astype(np.float64); inside = S[:, Q.NA - 1]            # events within 30 deg
     return np.array([W_GRID[np.searchsorted(S[i, :Q.NA], 0.68 * inside[i])] for i in range(NE)])
-cuts_arm = [('no cut', Cut()), ('LA ≥ 1 cm', Cut(la_min=1)), ('LA ≥ 2 cm', Cut(la_min=2)), ('LA ≥ 4 cm', Cut(la_min=4)), ('SQ ≤ 3', Cut(sq_max=3)), ('SQ = 2', Cut(sq_eq=2)),
+cuts_arm = [('no cut', Cut()), ('D ≥ 1 cm', Cut(la_min=1)), ('D ≥ 2 cm', Cut(la_min=2)), ('D ≥ 4 cm', Cut(la_min=4)), ('SQ ≤ 3', Cut(sq_max=3)), ('SQ = 2', Cut(sq_eq=2)),
             ('excl. middle-plane/surface hits', Cut(excl1=(1, 2), excl2=(1, 2))), ('top layer 1st hit', Cut(layers1=(3,)))]
 fig, ax = plt.subplots(figsize=(11, 5))
 for j, (nm, c) in enumerate(cuts_arm):
@@ -187,7 +187,7 @@ table('Signal |ARM| 68% containment [deg] (of the events within 30 deg)', [[nm] 
 
 # ---------------------------------------------------------------- 6. background composition and retention per component
 comps = sorted(per)
-cut_ref = [('no cut', Cut()), ('LA ≥ 1 cm', Cut(la_min=1)), ('SQ ≤ 3', Cut(sq_max=3)), ('best combined cut', Cut(la_min=combos[order[0]][0], sq_max=combos[order[0]][1], layers1=combos[order[0]][2][1], excl1=combos[order[0]][3][1], excl2=combos[order[0]][3][2]))]
+cut_ref = [('no cut', Cut()), ('D ≥ 1 cm', Cut(la_min=1)), ('SQ ≤ 3', Cut(sq_max=3)), ('best combined cut', Cut(la_min=combos[order[0]][0], sq_max=combos[order[0]][1], layers1=combos[order[0]][2][1], excl1=combos[order[0]][3][1], excl2=combos[order[0]][3][2]))]
 fig, axs = plt.subplots(1, len(cut_ref), figsize=(5.2 * len(cut_ref), 5.6), sharey=True)
 rows = []
 for ax, (nm, c) in zip(axs, cut_ref):
@@ -216,7 +216,7 @@ for lab, kw in (('default: weights E_true^-2.1, all directions', {}), ('weights 
     rows.append([lab, f'{100 * (combined(r1["fom"]) / combined(b0["fom"]) - 1):+.1f}', f'{100 * (combined(r2["fom"]) / combined(b0["fom"]) - 1):+.1f}',
                  f'{100 * (combined(r3["fom"]) / combined(b0["fom"]) - 1):+.1f}', ' '.join(f'{v:g}' for v in b0['w'])])
 table(f'Robustness (all bins in quadrature, % change): best combined cut = {name(bestc)}', rows,
-      ['signal variant', 'LA ≥ 1 cm', 'SQ ≤ 3', 'best combined', 'optimal w of the baseline per bin [deg]'])
+      ['signal variant', 'D ≥ 1 cm', 'SQ ≤ 3', 'best combined', 'optimal w of the baseline per bin [deg]'])
 
 open(os.path.join(outdir, 'quality_summary.md'), 'w').write('\n'.join(md) + '\n')
 print('\n'.join(md))

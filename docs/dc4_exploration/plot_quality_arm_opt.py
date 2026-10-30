@@ -1,4 +1,4 @@
-"""Effect of a Distance (LA) cut with the ARM window re-optimised for each cut: window, signal and background inside it.
+"""Effect of a Distance (first lever arm) cut with the ARM window re-optimised for each cut: window, signal and background inside it.
 Usage: python plot_quality_arm_opt.py signal_dir bkg_dir outdir"""
 import sys, os
 import numpy as np
@@ -28,12 +28,12 @@ for i in range(NE):
 axs[0].set_ylabel('optimal |ARM| half-width [deg]'); axs[0].legend(fontsize=7)
 axs[1].set_ylabel('signal inside the window / no-cut value'); axs[2].set_ylabel('background inside the window / no-cut value'); axs[2].set_yscale('log')
 axs[3].set_ylabel('change in S/√B [%] (own optimal window)'); axs[3].axhline(0, color='k', lw=0.5)
-for a in axs: a.set_xlabel('minimum Distance (LA) [cm]')
+for a in axs: a.set_xlabel('minimum Distance (first-to-second hit) [cm]')
 fig.suptitle('Distance cut with the ARM window re-optimised per cut (solid) vs keeping the no-cut window (dotted)'); fig.tight_layout()
 fig.savefig(os.path.join(outdir, 'quality_distance_arm_optimised.png'), dpi=100)
 sel = [las.index(v) for v in (1, 2, 4)]
 L = ['| cut | quantity | ' + ' | '.join(LAB) + ' |', '|' + '---|' * (NE + 2)]
 for j in sel:
     for nm, a, f in (('optimal w [deg]', w, '{:g}'), ('signal in window (rel.)', S, '{:.2f}'), ('background in window (rel.)', B, '{:.2f}'), ('bkg in the no-cut window (rel.)', Bfix, '{:.2f}')):
-        L.append(f'| LA ≥ {las[j]:g} cm | {nm} | ' + ' | '.join(f.format(a[j, i]) for i in range(NE)) + ' |')
+        L.append(f'| D ≥ {las[j]:g} cm | {nm} | ' + ' | '.join(f.format(a[j, i]) for i in range(NE)) + ' |')
 open(os.path.join(outdir, 'quality_distance_arm_optimised.md'), 'w').write('\n'.join(L) + '\n'); print('\n'.join(L))
