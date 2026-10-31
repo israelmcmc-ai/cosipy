@@ -59,10 +59,10 @@ def bkg_hist(bkgdir, components=None):
 
 class Cut:
     """A cut on the discrete grid: la_min [cm], sq_max, allowed layers of the first hit, depth types excluded for hit 1 / hit 2
-    (types: 1 = middle plane, 2 = within 0.1 cm of a surface), sq_eq (exact number of hits)."""
-    def __init__(self, la_min=0.0, sq_max=7, layers1=(0, 1, 2, 3), excl1=(), excl2=(), sq_eq=None, layers2=(0, 1, 2, 3)):
+    (types: 1 = middle plane, 2 = within 0.1 cm of a surface), sq_eq (exact number of hits), sq_min (keep at least this many hits)."""
+    def __init__(self, la_min=0.0, sq_max=7, layers1=(0, 1, 2, 3), excl1=(), excl2=(), sq_eq=None, layers2=(0, 1, 2, 3), sq_min=2):
         l = np.arange(NL) * DL >= la_min - 1e-9
-        s = np.arange(2, 8) <= sq_max
+        s = (np.arange(2, 8) <= sq_max) & (np.arange(2, 8) >= sq_min)
         if sq_eq is not None:
             s &= np.arange(2, 8) == sq_eq
         def catmask(layers, excl):
