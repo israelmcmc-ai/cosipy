@@ -312,3 +312,13 @@ Per energy bin, a Poisson regression models the signal-to-background ratio of ev
 - S/sqrt(B) changes by -36.8 +- 0.5% (all bins; -54, -29, -19, -24, -25, -25% from the lowest to the highest bin); trained on 5 signal files and evaluated on the other 5: -37.5% (no sign of overfitting). The best rectangular cut was -41.1%, so the classifier gains only about 4 points.
 - The classifier keeps mostly top-layer first hits (90% of the kept signal), SQ >= 3 and Distance 1-8 cm, but the kept signal and the kept background have almost identical distributions in every variable: after the first-hit layer, the quality variables carry very little extra signal-versus-background information.
 - Trade-off (all bins): 50% removed -8%, 70% -17%, 80% -26%, 90% -37%, 95% -49%, 98% -63% (rectangular cuts: -9, -20, -34, -41, -53% at 50, 70, 80, 90, 95%).
+
+**What improves or worsens the ARM** (`arm_vs_characteristics.py`, `figures_quality/arm_vs_characteristics.{md,png}`; response simulation, within each energy bin). Core width w50 = half-width containing 50% of the events with |ARM| < 30 deg, relative to the all-event value, averaged over the 6 energy bins (< 1 better):
+- Distance: <0.5 cm 1.63, 0.5-1 1.25, 1-2 1.01, 2-4 0.81, 4-8 **0.73**, >8 cm 0.92 (best at 4-8 cm; the very long hops get worse again, tails 1.11).
+- Scatter angle phi: <30 deg 0.64, 30-60 0.74, 60-90 1.12, 90-120 1.18, >120 1.35 (but phi < 30 deg has the largest tails, 1.46).
+- Number of hits: 2 hits 1.29, 3 0.95, 4 0.76, 5+ 0.68 (confounded with Distance and energy; tails also fall: 1.18, 0.90, 0.81, 0.80).
+- Second hit at a middle plane 1.56, first hit at a middle plane 1.34 (1% of the events); surface hits are neutral (0.99-1.03).
+- First-hit layer: bottom 1.28, 2 1.11, 3 0.98, top 0.90; second-hit layer: top 1.12, bottom 1.11, middle layers 0.91-0.93.
+- Hit 2 above hit 1 (scattered upwards) 1.19 vs downwards 0.87.
+- True source direction (not observable): from below (theta > 90) 1.39, from above 0.89-0.92.
+Many of these are correlated (long Distance, many hits and small phi go together), so they are not independent effects.
