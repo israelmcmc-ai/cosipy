@@ -117,3 +117,29 @@ for i in range(NE): axs[2].plot(np.array(levels) * 100, [r[0][i] for r in res['p
 axs[2].set_title('φ + Distance, hits, first layer, per energy bin'); axs[2].set_xlabel('background removed [%]'); axs[2].axhline(0, color='k', lw=.5)
 fig.tight_layout(); fig.savefig(os.path.join(outdir, 'phi_tradeoff.png'), dpi=100); plt.close(fig)
 open(os.path.join(outdir, 'phi_summary.md'), 'w').write('\n'.join(md) + '\n'); print('\n'.join(md))
+
+# ---- 4. most events removed for a limited loss of sensitivity (LOSS env, default 20%)
+import itertools
+LOSS = float(os.environ.get('LOSS', 20)); md2 = []
+def table2(t, rows, h):
+    md2.append(f'\n### {t}\n'); md2.append('| ' + ' | '.join(h) + ' |'); md2.append('|' + '---|' * len(h)); md2.extend('| ' + ' | '.join(r) + ' |' for r in rows)
+rows = []
+for nm, f in methods.items():
+    best = None
+    for lv in np.arange(0.40, 0.99, 0.01):
+        ev = fom_mask(classify(*f, lv)); ch, cc = change(ev)
+        if cc >= -LOSS: best = (lv, ev, ch, cc)
+    if best: lv, ev, ch, cc = best; rows.append([nm, f'{100 * lv:.0f}', f'{100 * ev[:, 2].mean():.0f}', f'{cc:+.1f}'] + [f'{v:+.1f}' for v in ch])
+table2(f'Largest per-bin background removal with an all-bin S/√B loss of at most {LOSS:g}% (ranked-cell selections)', rows, ['method', 'bkg removed [%]', 'signal kept [%]', 'all bins [%]'] + LAB)
+D_IDX = [0, 2, 3, 5]; SQMIN = [2, 3, 4]; SQMAX = [7, 5]; LAYS = [('all', (0, 1, 2, 3)), ('≥2', (1, 2, 3)), ('top', (3,))]; PLO = [0, 20, 40]; PHI = [60, 90, 180]
+Dn = ['0', '0.5', '1', '2', '3', '4', '6', '8', '12', '20']; res_r = []
+for dmin, smin, smax, lay, plo, phi_ in itertools.product(D_IDX, SQMIN, SQMAX, LAYS, PLO, PHI):
+    if smax < smin: continue
+    sh = (1, NP, ND, NS, NL)
+    m = ((PC >= plo) & (PC < phi_)).reshape(1, NP, 1, 1, 1) & (np.arange(ND) >= dmin).reshape(1, 1, ND, 1, 1) & ((np.arange(2, 8) >= smin) & (np.arange(2, 8) <= smax)).reshape(1, 1, 1, NS, 1) & np.isin(np.arange(NL), lay[1]).reshape(1, 1, 1, 1, NL)
+    m = np.broadcast_to(m, Nb.shape); ev = fom_mask(m); ch, cc = change(ev)
+    res_r.append((1 - (Nb * m).sum() / Nb.sum(), cc, ev, ch, f'Distance ≥ {Dn[dmin]} cm, SQ {smin}–{smax if smax < 7 else "7+"}, first-hit layer {lay[0]}, {plo}° ≤ φ < {phi_}°'))
+ok = sorted([r for r in res_r if r[1] >= -LOSS], key=lambda r: -r[0])
+table2(f'Rectangular cuts (Distance, number of hits, first-hit layer, φ window), most background removed with an all-bin loss of at most {LOSS:g}%',
+       [[r[4], f'{100 * r[0]:.0f}', f'{100 * r[2][:, 2].mean():.0f}', f'{r[1]:+.1f}'] + [f'{v:+.1f}' for v in r[3]] for r in ok[:8]], ['cut', 'bkg removed [%]', 'mean signal kept [%]', 'all bins [%]'] + LAB)
+open(os.path.join(outdir, 'phi_constraint_summary.md'), 'w').write('\n'.join(md2) + '\n'); print('\n'.join(md2))
