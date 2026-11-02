@@ -46,7 +46,7 @@ for tmax, nm in ((THREF, 'no pointing cut'), (TP, 'with pointing cut θ < 45°')
 fig, axs = plt.subplots(2, 2, figsize=(14, 9)); x = np.arange(len(cum))
 for col, (tmax, nm) in enumerate(((THREF, 'no pointing cut'), (TP, 'pointing cut θ < 45°'))):
     for i in range(NE):
-        axs[0, col].plot(x, [100 * (evaluate(kw, tmax)[0][i] - 1) for _, kw in cum], color=COL[i], marker='o', ms=3, label=LABS[i]); axs[1, col].plot(x, [100 * (evaluate(kw, tmax)[5][i] if tmax < THREF else 100 * evaluate(kw, tmax)[4][i]) for _, kw in cum], color=COL[i], marker='o', ms=3)
+        axs[0, col].plot(x, [100 * (evaluate(kw, tmax)[0][i] - 1) for _, kw in cum], color=COL[i], marker='o', ms=3, label=LABS[i]); axs[1, col].plot(x, [100 * (evaluate(kw, tmax)[5][i] if tmax < THREF else evaluate(kw, tmax)[4][i]) for _, kw in cum], color=COL[i], marker='o', ms=3)
     axs[0, col].plot(x, [100 * (evaluate(kw, tmax)[1] - 1) for _, kw in cum], 'k--', marker='s', label='all bins'); axs[0, col].set_title(nm); axs[0, col].set_ylabel('SNR change vs reference [%]'); axs[1, col].set_ylabel('background rejected [%]' + (' (time + events)' if tmax < THREF else ' (events)'))
     for r in (0, 1): axs[r, col].set_xticks(x); axs[r, col].set_xticklabels(['+ ' + c[0] for c in cum], rotation=25, fontsize=8, ha='right')
 axs[0, 0].legend(fontsize=7); fig.tight_layout(); fig.savefig(os.path.join(outdir, 'cuts_pointing.png'), dpi=100)
