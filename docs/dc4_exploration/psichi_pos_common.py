@@ -27,7 +27,7 @@ print('sanity (sphere average of the position-dependent window fraction vs the i
 LAB = [f'{E_EDGES[i]:.0f}–{E_EDGES[i + 1]:.0f} keV' for i in range(NE)]; COL = plt.cm.viridis(np.linspace(0, 0.9, NE))
 ev = {k: np.concatenate([np.load(f)[k] for f in sorted(glob.glob(sigdir + '/*.npz'))]) for k in ('E', 'arm', 'Etrue', 'theta_src', 'phi', 'd01', 'sq', 'cat1', 'z1', 'z2')}
 phi = np.rad2deg(ev['phi'].astype(float)); psi = np.rad2deg(np.arccos(np.clip(-(ev['z2'].astype(float) - ev['z1']) / ev['d01'], -1, 1))); dpf = np.abs(psi - phi); below = ev['z2'] < ev['z1']
-iE = np.digitize(ev['E'], E_EDGES) - 1; iA = np.clip((np.abs(ev['arm']) / DA).astype(int), 0, NA); wt = ev['Etrue'].astype(float) ** -2.1; ok0 = (iE >= 0) & (iE < NE); iT = np.clip((ev['theta_src'] / 5).astype(int), 0, NT - 1)
+iE = np.digitize(ev['E'], E_EDGES) - 1; iA = np.clip((np.abs(ev['arm']) / DA).astype(int), 0, NA); wt = (ev['Etrue'].astype(float) / 1000.0) ** -float(os.environ.get('GAMMA', '2.1')); ok0 = (iE >= 0) & (iE < NE); iT = np.clip((ev['theta_src'] / 5).astype(int), 0, NT - 1)
 def cut(dmin=0, lay=(0, 1, 2, 3), phimax=181, sq5=True, down=None, zcap=None):
     """returns signal event mask and background cell mask; zcap: |psi - phi| < zcap (no extra margin)."""
     sm = (ev['d01'] >= dmin) & np.isin(ev['cat1'] // 3, lay) & (phi < phimax)
