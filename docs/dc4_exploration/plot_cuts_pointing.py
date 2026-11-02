@@ -6,8 +6,9 @@ import numpy as np
 import matplotlib; matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from psichi_pos_common import *
+SUF = '' if float(os.environ.get('THREF', '90')) == 90 else '_ref' + os.environ.get('THREF', '90')
 
-ref, _ = snr2(*cut(sq5=False)); THREF = 90.0; TP = 45.0
+THREF = float(os.environ.get('THREF', '90')); ref, _ = snr2(*cut(sq5=False)); TP = 45.0
 steps = [('Distance ≥ 1 cm', dict(dmin=1, sq5=False)), ('SQ ≤ 5', dict(sq5=True)), ('upper two layers', dict(lay=(2, 3), sq5=False)), ('φ < 90°', dict(phimax=90, sq5=False)), ('filter |ψ−φ| < 45°', dict(zcap=45, sq5=False))]
 cum = []; kw = dict(sq5=False)
 for nm, k in steps:
@@ -49,5 +50,5 @@ for col, (tmax, nm) in enumerate(((THREF, 'no pointing cut'), (TP, 'pointing cut
         axs[0, col].plot(x, [100 * (evaluate(kw, tmax)[0][i] - 1) for _, kw in cum], color=COL[i], marker='o', ms=3, label=LABS[i]); axs[1, col].plot(x, [100 * (evaluate(kw, tmax)[5][i] if tmax < THREF else evaluate(kw, tmax)[4][i]) for _, kw in cum], color=COL[i], marker='o', ms=3)
     axs[0, col].plot(x, [100 * (evaluate(kw, tmax)[1] - 1) for _, kw in cum], 'k--', marker='s', label='all bins'); axs[0, col].set_title(nm); axs[0, col].set_ylabel('SNR change vs reference [%]'); axs[1, col].set_ylabel('background rejected [%]' + (' (time + events)' if tmax < THREF else ' (events)'))
     for r in (0, 1): axs[r, col].set_xticks(x); axs[r, col].set_xticklabels(['+ ' + c[0] for c in cum], rotation=25, fontsize=8, ha='right')
-axs[0, 0].legend(fontsize=7); fig.tight_layout(); fig.savefig(os.path.join(outdir, 'cuts_pointing.png'), dpi=100)
-open(os.path.join(outdir, 'cuts_pointing_summary.md'), 'w').write('\n'.join(md) + '\n'); print('\n'.join(md))
+axs[0, 0].legend(fontsize=7); fig.tight_layout(); fig.savefig(os.path.join(outdir, f'cuts_pointing{SUF}.png'), dpi=100)
+open(os.path.join(outdir, f'cuts_pointing_summary{SUF}.md'), 'w').write('\n'.join(md).replace('θ < 90°', f'θ < {THREF:g}°').replace('SNR(90°)', f'SNR({THREF:g}°)') + '\n'); print('\n'.join(md))

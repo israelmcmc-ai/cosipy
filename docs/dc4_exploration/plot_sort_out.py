@@ -8,8 +8,9 @@ import numpy as np
 import matplotlib; matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from psichi_pos_common import *
+SUF = '' if float(os.environ.get('THREF', '90')) == 90 else '_ref' + os.environ.get('THREF', '90')
 
-THREF = 90.0; tsel = lambda tmax: TC < tmax
+THREF = float(os.environ.get('THREF', '90')); tsel = lambda tmax: TC < tmax
 def run(zcap=None):
     s2, rem = snr2(*cut(sq5=False, zcap=zcap)); return s2, rem
 ref, _ = run(None)                                                                  # (NE, NT) SNR^2 per zenith bin
@@ -21,7 +22,7 @@ def table(t, rows, h):
 LABS = LAB
 # ---- 1. reference
 table('Reference SNR (transit θ < 90°, E⁻² spectrum, arbitrary units; relative to the 200–342 keV bin)', [['SNR'] + [f'{v / R[0]:.2f}' for v in R] + [f'{RA / R[0]:.2f}']], ['quantity'] + LABS + ['all bins (quadrature)'])
-tm_list = [5 * k for k in range(1, 19)]; cum = np.array([[np.sqrt(ref[i, tsel(t)].sum() / ref[i, tsel(THREF)].sum()) for t in tm_list] for i in range(NE)])
+tm_list = [5 * k for k in range(1, int(THREF // 5) + 1)]; cum = np.array([[np.sqrt(ref[i, tsel(t)].sum() / ref[i, tsel(THREF)].sum()) for t in tm_list] for i in range(NE)])
 table('Share of the reference SNR reached with the bins θ < θmax (SNR(θmax)/SNR(90°))', [[f'{t}°'] + [f'{v:.2f}' for v in cum[:, j]] for j, t in enumerate(tm_list) if t in (10, 15, 20, 30, 45, 60, 75, 90)], ['θmax'] + LABS)
 # ---- 2. pointing cut
 point = {t: np.sqrt(ref[:, tsel(t)].sum(1) / ref[:, tsel(THREF)].sum(1)) for t in tm_list}; pointA = {t: np.sqrt(ref[:, tsel(t)].sum() / ref[:, tsel(THREF)].sum()) for t in tm_list}
@@ -50,7 +51,7 @@ axs[1].plot(tm_list, [100 * (1 - pointA[t]) for t in tm_list], 'k--', label='all
 axs[1].set_xlabel('maximum zenith θmax [deg]'); axs[1].set_ylabel('[%]'); axs[1].set_title('2. Pointing cut: SNR loss (solid) and background rejection (red)'); axs[1].legend(fontsize=7)
 for i in range(NE): axs[2].plot(th0, [100 * (fa[t][0][i] - 1) for t in th0], color=COL[i], marker='o', ms=3, label=f'SNR change {LABS[i]}'); axs[2].plot(th0, [100 * fa[t][2][i] for t in th0], color=COL[i], ls=':')
 axs[2].set_xscale('log'); axs[2].set_xlabel('θ0 [deg]'); axs[2].set_ylabel('SNR change (solid) / background rejected (dotted) [%]'); axs[2].set_title('3a. Upward-going filter, no pointing cut'); axs[2].axhline(0, color='k', lw=.5)
-fig.tight_layout(); fig.savefig(os.path.join(outdir, 'sortout_1_2_3a.png'), dpi=95); plt.close(fig)
+fig.tight_layout(); fig.savefig(os.path.join(outdir, f'sortout_1_2_3a{SUF}.png'), dpi=95); plt.close(fig)
 fig, axs = plt.subplots(2, 3, figsize=(18, 9.5)); CT = plt.cm.plasma(np.linspace(0, 0.85, len(tmaxs)))
 for j, (tm, c) in enumerate(zip(tmaxs, CT)):
     ms = [m for m in margins if (tm, m) in fb]
@@ -62,5 +63,5 @@ for j, (tm, c) in enumerate(zip(tmaxs, CT)):
 axs[0, 0].set_ylabel('all-bin SNR change vs the pointing cut alone [%]'); axs[0, 1].set_ylabel('all-bin SNR change vs the reference (θ<90°, no filter) [%]'); axs[0, 2].set_ylabel('total background rejected (time + filter) [%]')
 axs[1, 0].set_ylabel('background events rejected by the filter [%]'); axs[1, 1].set_ylabel('SNR change vs pointing cut alone [%]: 200–342 (solid), 585–1000 (dashed), 2.9–5 MeV (dotted)')
 for a in axs.flat[:5]: a.set_xlabel('margin θ0 − θmax [deg]'); a.axhline(0, color='k', lw=.5); a.axvline(0, color='k', lw=.5, ls=':')
-axs[0, 0].legend(fontsize=8); axs[1, 2].axis('off'); fig.suptitle('3b. Upward-going filter combined with the pointing cut vs the margin θ0 − θmax'); fig.tight_layout(); fig.savefig(os.path.join(outdir, 'sortout_3b.png'), dpi=95)
-open(os.path.join(outdir, 'sortout_summary.md'), 'w').write('\n'.join(md) + '\n'); print('\n'.join(md))
+axs[0, 0].legend(fontsize=8); axs[1, 2].axis('off'); fig.suptitle('3b. Upward-going filter combined with the pointing cut vs the margin θ0 − θmax'); fig.tight_layout(); fig.savefig(os.path.join(outdir, f'sortout_3b{SUF}.png'), dpi=95)
+open(os.path.join(outdir, f'sortout_summary{SUF}.md'), 'w').write('\n'.join(md).replace('θ < 90°', f'θ < {THREF:g}°').replace('SNR(90°)', f'SNR({THREF:g}°)') + '\n'); print('\n'.join(md))
