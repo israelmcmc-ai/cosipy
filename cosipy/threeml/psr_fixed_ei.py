@@ -81,10 +81,9 @@ class UnbinnedThreeMLPointSourceResponseTrapz(UnbinnedThreeMLSourceResponseInter
         cells : sequence of (level, index)
             Cells of the cache that tile its energy range.
         mono_nodes : Quantity, optional
-            Energies of monoenergetic (Dirac delta) components. The spectrum evaluated
-            there is taken as the integrated line flux (ph/cm2/s), as returned by
-            astromodels' ``DiracDelta``. Any continuum component at these exact energies
-            would be misinterpreted as line flux.
+            Energies of the monoenergetic (``DiracDelta``) components of the spectrum.
+            Each line's integrated flux (ph/cm2/s) is taken from its ``DiracDelta``
+            alone, and the continuum from the other components.
         batch_size : int
             Maximum number of IRF evaluations per call.
         offset : float, optional
@@ -392,14 +391,20 @@ class UnbinnedThreeMLPointSourceResponseTrapz(UnbinnedThreeMLSourceResponseInter
             self._compute_cache(coord)
             self._last_convolved_source_skycoord = coord.copy()
 
+        # Lines are evaluated on their own: the continuum at a line energy is not line
+        # flux, and a line at a node is not continuum
+        _, lines = self._continuum_and_lines(self._source)
+
         # g = F / w at the nodes. F in 1/cm2/s/keV (3ML default)
-        g = self._source(self._nodes_keV) / self._nodes_keV ** self._weight_index
+        continuum = self._source(self._nodes_keV) - sum(np.asarray(f(self._nodes_keV), dtype=float) for f in lines)
+        g = continuum / self._nodes_keV ** self._weight_index
 
         self._nevents = float(self._exposure @ g)
         density = self._event_resp @ g  # 1/keV.s.rad.sr
 
         if self._line_energies_keV.size > 0:
-            line_flux = self._source(self._line_energies_keV)  # 1/cm2/s
+            line_flux = np.array([sum(float(f(energy)) for f in lines if np.isclose(f.zero_point.value, energy))
+                                  for energy in self._line_energies_keV])  # 1/cm2/s
             self._nevents += float(self._line_exposure @ line_flux)
             density = density + self._line_resp @ line_flux
 

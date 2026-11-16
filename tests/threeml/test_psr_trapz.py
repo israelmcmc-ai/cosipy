@@ -214,6 +214,46 @@ def test_lines_with_the_original_irf(irf_file, cache_file, data, sc_history):
     np.testing.assert_allclose(psr.expectation_density(), LIVETIME_RATIO * 1e-3 * diff)
 
 
+def test_lines_and_continuum_are_evaluated_separately(irf_file, cache_file, data, sc_history):
+    """A continuum plus two lines, one of them at a node, gives the continuum alone (folded
+    without lines) plus each line with the original IRF: the continuum at a line energy is
+    not line flux, and a line at a node is not continuum."""
+
+    irf = IRFRelativeHistUnpolarized.from_h5(irf_file)
+    cache = make_cache(irf_file, cache_file)
+    cells = [(1, 0), (1, 1)]
+
+    def make_psr(shape, mono_nodes=None):
+        psr = UnbinnedThreeMLPointSourceResponseTrapz(data, irf, sc_history, cache, cells,
+                                                      mono_nodes=mono_nodes, offset=None)
+        psr.set_source(PointSource('src', l=0, b=0, spectral_shape=shape))
+        return psr
+
+    continuum = make_psr(Powerlaw(K=1e-2, index=-2, piv=100))
+    node = continuum._nodes_keV[1]
+
+    lines = {511.: 1e-3, node: 2e-3}
+    spectrum = Powerlaw(K=1e-2, index=-2, piv=100)
+    for energy, flux in lines.items():
+        line = DiracDelta(value=flux, zero_point=energy)
+        line.zero_point.fix = True
+        spectrum = spectrum + line
+    mixed = make_psr(spectrum, list(lines) * u.keV)
+
+    counts, density = continuum.expected_counts(), np.asarray(continuum.expectation_density())
+    events = EmCDSEventDataInSCFrameFromArrays(np.asarray(data.energy_keV), np.asarray(data.scattered_lon_rad_sc),
+                                               np.asarray(data.scattered_lat_rad_sc),
+                                               np.asarray(data.scattering_angle_rad))
+    for energy, flux in lines.items():
+        photons = PhotonListWithDirectionAndEnergyInSCFrame(np.full(data.nevents, LON), np.full(data.nevents, LAT),
+                                                            np.full(data.nevents, energy))
+        counts += LIVETIME * flux * irf.effective_area_cm2(photons[0])
+        density = density + LIVETIME_RATIO * flux * np.asarray(irf.differential_effective_area_cm2(photons, events))
+
+    assert mixed.expected_counts() == pytest.approx(counts)
+    np.testing.assert_allclose(mixed.expectation_density(), density)
+
+
 def test_free_line_energy_raises():
     spectrum = DiracDelta(value=1e-3, zero_point=511.)
     spectrum.zero_point.free = True
