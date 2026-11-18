@@ -225,13 +225,29 @@ class BroadenedIRFCache:
 
     @staticmethod
     def _irf_id(irf: IRFRelativeHistUnpolarized) -> str:
-        """Hash of the axes of the response, to detect a cache built from another one."""
+        """
+        Hash of the response, to detect a cache built from another one: its axes,
+        the separate effective area if any, and the normalized contents of a few
+        ``NuLambda`` pixels spread over the sky. Hashing all the contents would mean
+        reading the whole response; two responses that differ only elsewhere get the
+        same hash.
+        """
 
         digest = hashlib.sha1()
         for axis in irf.axes:
             digest.update(axis.label.encode())
             digest.update(np.ascontiguousarray(axis.edges if axis.label != 'NuLambda' else [axis.nside],
                                                dtype=float).tobytes())
+
+        if not irf._aeff_from_irf:
+            digest.update(np.ascontiguousarray(irf._tot_aeff.contents, dtype=float).tobytes())
+
+        npix = irf.axes['NuLambda'].npix
+        pixels = np.unique(np.linspace(0, npix - 1, 4).astype(int))
+        irf._load_pixels([p for p in pixels if not irf._loaded[p]])
+        for pixel in pixels:
+            digest.update(np.ascontiguousarray(irf._event_prob.contents[pixel], dtype=float).tobytes())
+
         return digest.hexdigest()
 
     def _open_or_create(self):
