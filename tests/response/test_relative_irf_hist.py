@@ -677,25 +677,63 @@ class TestEventProbability:
                       PHOTONS_AT[1]]
 
         for lon, lat, energy in photons_at:
-            mids, weight = self._sub_cells(model, energy, nsub=8)
-            eps, phi_kin, theta, zeta = np.meshgrid(*mids, indexing='ij')
-            phi_geo = phi_kin + theta
-            physical = (weight > 0) & (phi_geo > 0) & (phi_geo < np.pi)
+            assert self._integral_over_data_space(model, lon, lat, energy) == pytest.approx(1., rel=2e-3)
 
-            n = physical.sum()
-            relcoords = RelativeCDSCoordinates(_direction(np.full(1, lon), np.full(1, lat)).to_cartesian().xyz,
-                                               model._pol_convention)
-            psichi = RelativeCDSCoordinates.to_cds(relcoords, phi_geo[physical], zeta[physical])
-            psichi = UnitSphericalRepresentation.from_cartesian(
-                CartesianRepresentation(*psichi, unit=u.one))
+    @staticmethod
+    def _integral_over_data_space(model, lon, lat, energy, method='_interp_event_prob'):
+        """Integral of the density of one photon, evaluated with ``method``, over
+        events built from a grid of sub-cells in the relative coordinates."""
 
-            photons = _FakePhotonList(np.full(n, lon), np.full(n, lat), np.full(n, energy))
-            events = _FakeEventData(psichi.lon.to_value(u.rad), psichi.lat.to_value(u.rad), phi_kin[physical],
-                                    energy * (1 + eps[physical]))
+        mids, weight = TestEventProbability._sub_cells(model, energy, nsub=8)
+        eps, phi_kin, theta, zeta = np.meshgrid(*mids, indexing='ij')
+        phi_geo = phi_kin + theta
+        physical = (weight > 0) & (phi_geo > 0) & (phi_geo < np.pi)
 
-            prob = model._interp_event_prob(photons, events)
+        n = physical.sum()
+        relcoords = RelativeCDSCoordinates(_direction(np.full(1, lon), np.full(1, lat)).to_cartesian().xyz,
+                                           model._pol_convention)
+        psichi = RelativeCDSCoordinates.to_cds(relcoords, phi_geo[physical], zeta[physical])
+        psichi = UnitSphericalRepresentation.from_cartesian(CartesianRepresentation(*psichi, unit=u.one))
 
-            assert np.sum(prob * weight[physical]) == pytest.approx(1., rel=2e-3)
+        photons = _FakePhotonList(np.full(n, lon), np.full(n, lat), np.full(n, energy))
+        events = _FakeEventData(psichi.lon.to_value(u.rad), psichi.lat.to_value(u.rad), phi_kin[physical],
+                                energy * (1 + eps[physical]))
+
+        return np.sum(np.asarray(getattr(model, method)(photons, events)) * weight[physical])
+
+    @pytest.mark.parametrize('use_aeff', [False, True])
+    def test_next_to_an_empty_slice(self, use_aeff):
+        """Pixel 0, Ei bin 1 of _make_physical_irf_hist is empty. Halfway between
+        that Ei center and the previous one, and at the empty center itself, the
+        probability integrates to 1 and the differential area to the effective
+        area: the density of the slices that have one is renormalized."""
+
+        irf = _make_physical_irf_hist()
+        model = IRFRelativeHistUnpolarized(irf, aeff=_make_aeff_hist() if use_aeff else None)
+        lon, lat = np.deg2rad(model.axes['NuLambda'].pix2ang(0, lonlat=True))
+        centers = model.axes['Ei'].centers
+
+        for energy in (np.sqrt(centers[0] * centers[1]), centers[1]):
+            assert self._integral_over_data_space(model, lon, lat, energy) == pytest.approx(1., rel=2e-3)
+
+            photons = _FakePhotonList(np.full(1, lon), np.full(1, lat), np.full(1, energy))
+            area = model._effective_area_cm2(photons)[0]
+            assert (self._integral_over_data_space(model, lon, lat, energy, '_differential_effective_area_cm2')
+                    == pytest.approx(area, rel=2e-3))
+
+    def test_separate_aeff_beyond_the_response_ei_range(self):
+        """The aeff spans [50, 2000] keV and the response [100, 1000] keV: outside the
+        response there is no density, and so no area."""
+
+        model = IRFRelativeHistUnpolarized(_make_irf_hist(), aeff=_make_aeff_hist())
+
+        for energy in (75., 1500.):
+            photons, events = _one_photon_events(energy, [0.1], n=1)
+            assert model._effective_area_cm2(photons)[0] == 0
+            assert model._differential_effective_area_cm2(photons, events)[0] == 0
+
+        photons, _ = _one_photon_events(500., [0.1], n=1)
+        assert model._effective_area_cm2(photons)[0] > 0
 
     @pytest.mark.parametrize('ranges', [[[150., 400.]], [[160., 190.], [250., 330.]], [[300., 340.]],
                                         [[310., 330.]], [[300., 900.]]])
