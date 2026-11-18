@@ -140,6 +140,17 @@ def test_precompute_and_persistence(cache, irf, tmp_path):
         BroadenedIRFCache(irf, tmp_path / 'cache.h5', energy_range_keV=(100., 1000.), weight_index=-1.)
 
 
+def test_cache_of_another_response_with_the_same_axes_raises(cache, tmp_path):
+    cache.precompute(0, pixels=[PIXEL])
+
+    path = tmp_path / 'other_irf.h5'
+    make_irf_hist(seed=1).write(path, name='IRF')
+    other = IRFRelativeHistUnpolarized.from_h5(path)
+
+    with pytest.raises(ValueError):
+        BroadenedIRFCache(other, tmp_path / 'cache.h5', energy_range_keV=(100., 1000.), max_level=3)
+
+
 def test_single_writer(cache, tmp_path):
     lock = tmp_path / 'cache.h5.lock'
     lock.touch()
