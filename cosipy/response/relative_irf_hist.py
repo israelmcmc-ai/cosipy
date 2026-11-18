@@ -362,6 +362,7 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
 
         npix = axes['NuLambda'].nbins
         self._epsilon_marginal = np.zeros((npix, axes['Ei'].nbins, axes['Epsilon'].nbins))
+        self._has_density = np.zeros((npix, axes['Ei'].nbins))
         self._loaded = np.zeros(npix, dtype=bool)
 
         if self._source is None:
@@ -580,6 +581,8 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
 
         # Integral over Phi, Theta and Zeta of the normalized density, per Epsilon center
         self._epsilon_marginal[pixel] = cds_marginal * inv_integral[:, None]
+        # Slices with a density. Empty ones can't be normalized and stay zero, see _coverage
+        self._has_density[pixel] = integral > 0
         self._loaded[pixel] = True
 
     def _pixel_table(self, pixel: int) -> np.ndarray:
@@ -667,6 +670,33 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
 
         return np.einsum('ab,aj,bk->jk', phase_space, phi_hats, theta_hats)[:, :, None] * zeta_integrals
 
+    def _coverage(self, pix, wpix, ei_bins, wei) -> np.ndarray:
+        """
+        Interpolation weight carried by the ``(NuLambda, Ei)`` slices that have
+        a density, given the ``NuLambda`` and ``Ei`` interpolation weights of
+        each photon. The interpolated probability integrates to this, since
+        every slice with a density integrates to 1 and the empty ones to 0. It
+        is 1 where all the neighboring slices have a density.
+        """
+
+        coverage = np.zeros(np.shape(wei)[1:])
+        for p, w_p in zip(pix, wpix):
+            for k, w_k in zip(ei_bins, wei):
+                coverage += w_p * w_k * self._has_density[p, k]
+
+        return coverage
+
+    def _photon_coverage(self, photon_lon_rad, photon_lat_rad, energy_keV) -> np.ndarray:
+        """:meth:`_coverage` for photons, with the weights of the density."""
+
+        photon_dir = UnitSphericalRepresentation(lon=Quantity(photon_lon_rad, 'rad', copy=False),
+                                                 lat=Quantity(photon_lat_rad, 'rad', copy=False))
+        axes = self._event_prob.axes
+        pix, wpix = axes['NuLambda'].interp_weights(photon_dir)
+        ei_bins, wei = axes['Ei'].interp_weights(np.clip(energy_keV, 1e-10, None))
+
+        return self._coverage(pix, wpix, ei_bins, wei)
+
     def _selected_fraction(self, photons: PhotonListWithDirectionAndEnergyInSCFrameInterface) -> np.ndarray:
         """
         Fraction of the interpolated event probability of each photon with
@@ -696,6 +726,10 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
         for p, w_p in zip(pix, wpix):
             for k, w_k in zip(ei_bins, wei):
                 fraction += w_p * w_k * np.einsum('ni,ni->n', self._epsilon_marginal[p, k], hat_cut)
+
+        # Relative to the probability, which is divided by the coverage
+        coverage = self._coverage(pix, wpix, ei_bins, wei)
+        fraction = np.divide(fraction, coverage, out=np.zeros_like(fraction), where=coverage > 0)
 
         return np.where(self._in_ei_range(self._event_prob, energy_keV), fraction, 0.0)
 
@@ -913,9 +947,9 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
 
         photon_lon_rad, photon_lat_rad, photon_energy_keV = self._photon_list_to_raw_values(photons)
 
-        if self._aeff_from_irf:
-            self._ensure_loaded(UnitSphericalRepresentation(lon=Quantity(photon_lon_rad, 'rad', copy=False),
-                                                            lat=Quantity(photon_lat_rad, 'rad', copy=False)))
+        # Also with a separate aeff: the area is zero where the response has no density
+        self._ensure_loaded(UnitSphericalRepresentation(lon=Quantity(photon_lon_rad, 'rad', copy=False),
+                                                        lat=Quantity(photon_lat_rad, 'rad', copy=False)))
 
         def build_args(lon_rad, lat_rad, energy_keV):
             photon_dir = UnitSphericalRepresentation(lon=Quantity(lon_rad, 'rad', copy=False),
@@ -925,7 +959,13 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
         values = np.asarray(self._parallel_interp(self._tot_aeff, build_args,
                                                   (photon_lon_rad, photon_lat_rad, photon_energy_keV)))
 
-        return np.where(self._in_ei_range(self._tot_aeff, photon_energy_keV), values, 0.0)
+        # Only where the response has a density to distribute the area over: a
+        # separate aeff can extend beyond the response's Ei range, or cover
+        # empty slices
+        has_density = (self._in_ei_range(self._event_prob, photon_energy_keV)
+                       & (self._photon_coverage(photon_lon_rad, photon_lat_rad, photon_energy_keV) > 0))
+
+        return np.where(self._in_ei_range(self._tot_aeff, photon_energy_keV) & has_density, values, 0.0)
 
     @staticmethod
     def _in_ei_range(hist: Histogram, energy_keV: np.ndarray) -> np.ndarray:
@@ -980,7 +1020,9 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
         ``_event_prob`` interpolated at each (photon, event) pair, in
         ``1 / sr / rad / keV``, without any selection fraction applied.
         The stored table is per unit ``Epsilon``, so the interpolated value
-        is divided by the photon energy.
+        is divided by the photon energy. It is also divided by the weight of
+        the interpolation on slices that have a density (:meth:`_coverage`),
+        so it integrates to 1 next to empty slices too.
 
         For each pair the incident photon direction and energy are
         combined with the event's scattered direction, kinematic
@@ -1045,6 +1087,11 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
                                                 (photon_lon_rad, photon_lat_rad, photon_energy_keV,
                                                  epsilon, phi_kin_rad, theta_rad, zeta_rad),
                                                 fill_value=self._FILL_VALUE, extrapolate=True)) / photon_energy_keV
+
+        # Between a slice with a density and an empty one, the interpolation integrates
+        # to less than 1: renormalize over the slices that have one
+        coverage = self._photon_coverage(photon_lon_rad, photon_lat_rad, photon_energy_keV)
+        prob = np.divide(prob, coverage, out=np.zeros_like(prob), where=coverage > 0)
 
         return np.where(self._in_ei_range(self._event_prob, photon_energy_keV), prob, 0.0)
 
