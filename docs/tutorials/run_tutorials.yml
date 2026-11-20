@@ -138,6 +138,23 @@ tutorials:
         COSI-SMEX/DC4/Data/Responses/unpolarized_nfresponse_v1-01.pt:
           checksum: bf2d0c16eac5954fb56489480c2602ca
 
+    line_fit_orer_relative_hist:
+      notebook: spectral_fits/line_fit/example_orer-pointsource_line-analysis.ipynb
+      wasabi_files:
+        COSI-SMEX/DC4/Data/Sources/OrEr_Al26_tuto_unbinned_data_filtered_with_SAAcut.fits.gz:
+          checksum: fbf592b4e62e7777988994735ae1559d
+        COSI-SMEX/DC4/Data/Orientation/DC4_final_530km_3_month_with_slew_15sbins_GalacticEarth_SAA.ori:
+          checksum: bbbe34004153d3a75b051f78cb2a93d9
+        COSI-SMEX/DC4/Data/Backgrounds/Total_DC4_BG_3months_unbinned_data_filtered_with_SAAcut_withSAAbck.fits.gz:
+          checksum: 73c8b23e43684da3b35c25499254202b
+        COSI-SMEX/DC4/Data/Responses/nfbackground_v2-00.pt:
+          checksum: 4527aa23ee30bbfc739763a4905a0de6
+        COSI-SMEX/DC4/Data/Responses/1EMD_bkg-nfnormalization-density_v3-00.pt:
+          checksum: 42d55268bdba9fa670ba8ad22adde2cd
+        COSI-SMEX/develop/Data/Responses/relative_hist_irf_from_nf_response.h5.zip:
+          checksum: d9093daeaf56a386095a42ae40c6635e
+          unzip: True
+
     spectral_fit_normalizing_flows_crab:
       notebook: spectral_fits/continuum_fit/crab/example_crab_fit_normalizing_flows.ipynb
       wasabi_files:
