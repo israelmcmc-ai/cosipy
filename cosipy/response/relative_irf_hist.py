@@ -1,4 +1,5 @@
 import functools
+import warnings
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Iterable, Tuple, Union
@@ -559,6 +560,7 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
         integral = cds_marginal @ self._epsilon_hats.integrals()
         inv_integral = np.divide(1., integral, out=np.zeros_like(integral), where=integral > 0)
         contents *= inv_integral[:, None, None, None, None]
+        self._warn_empty_slices(integral, self._event_prob.axes['Ei'])
 
         # Integral over Phi, Theta and Zeta of the normalized density, per Epsilon center
         self._epsilon_marginal[pixel] = cds_marginal * inv_integral[:, None]
@@ -623,6 +625,23 @@ class IRFRelativeHistUnpolarized(FarFieldSpectralInstrumentResponseFunctionInter
         zeta_integrals = _Hats(axes['Zeta'], 'periodic').integrals()
 
         return np.einsum('ab,aj,bk->jk', phase_space, phi_hats, theta_hats)[:, :, None] * zeta_integrals
+
+    @staticmethod
+    def _warn_empty_slices(integral: np.ndarray, ei_axis: Axis):
+        """
+        Warn if any ``(NuLambda, Ei)`` slice has no density (``integral``, with
+        ``Ei`` as the last axis, is not positive), since it can't be normalized.
+        """
+
+        empty = np.any(np.reshape(integral, (-1, ei_axis.nbins)) <= 0, axis=0)
+
+        if np.any(empty):
+            edges = np.asarray(getattr(ei_axis.edges, 'value', ei_axis.edges), dtype=float)
+            bins = ', '.join(f"{lo:g}-{hi:g}" for lo, hi in zip(edges[:-1][empty], edges[1:][empty]))
+            warnings.warn(f"The response has empty (NuLambda, Ei) slices in the Ei bins [{bins}] keV. "
+                          f"They can't be normalized: next to them the event probability integrates "
+                          f"to less than 1 and is not consistent with the effective area.",
+                          stacklevel=3)
 
     def _selected_fraction(self, photons: PhotonListWithDirectionAndEnergyInSCFrameInterface) -> np.ndarray:
         """

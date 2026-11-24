@@ -1,4 +1,5 @@
 from concurrent.futures import ThreadPoolExecutor
+import warnings
 
 import numpy as np
 import pytest
@@ -699,6 +700,17 @@ class TestEventProbability:
                                 energy * (1 + eps[physical]))
 
         return np.sum(np.asarray(getattr(model, method)(photons, events)) * weight[physical])
+
+    def test_empty_slices_warn(self):
+        """_make_physical_irf_hist has an empty (NuLambda, Ei) slice, which can't be
+        normalized; a response without empty slices doesn't warn."""
+
+        with pytest.warns(UserWarning, match=r"empty \(NuLambda, Ei\) slices in the Ei bins \[215.443-464.159\]"):
+            IRFRelativeHistUnpolarized(_make_physical_irf_hist())
+
+        with warnings.catch_warnings():
+            warnings.simplefilter('error', UserWarning)
+            IRFRelativeHistUnpolarized(_make_irf_hist())
 
     def test_separate_aeff_beyond_the_response_ei_range(self):
         """The aeff spans [50, 2000] keV and the response [100, 1000] keV: outside the
