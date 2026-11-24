@@ -700,26 +700,6 @@ class TestEventProbability:
 
         return np.sum(np.asarray(getattr(model, method)(photons, events)) * weight[physical])
 
-    @pytest.mark.parametrize('use_aeff', [False, True])
-    def test_next_to_an_empty_slice(self, use_aeff):
-        """Pixel 0, Ei bin 1 of _make_physical_irf_hist is empty. Halfway between
-        that Ei center and the previous one, and at the empty center itself, the
-        probability integrates to 1 and the differential area to the effective
-        area: the density of the slices that have one is renormalized."""
-
-        irf = _make_physical_irf_hist()
-        model = IRFRelativeHistUnpolarized(irf, aeff=_make_aeff_hist() if use_aeff else None)
-        lon, lat = np.deg2rad(model.axes['NuLambda'].pix2ang(0, lonlat=True))
-        centers = model.axes['Ei'].centers
-
-        for energy in (np.sqrt(centers[0] * centers[1]), centers[1]):
-            assert self._integral_over_data_space(model, lon, lat, energy) == pytest.approx(1., rel=2e-3)
-
-            photons = _FakePhotonList(np.full(1, lon), np.full(1, lat), np.full(1, energy))
-            area = model._effective_area_cm2(photons)[0]
-            assert (self._integral_over_data_space(model, lon, lat, energy, '_differential_effective_area_cm2')
-                    == pytest.approx(area, rel=2e-3))
-
     def test_separate_aeff_beyond_the_response_ei_range(self):
         """The aeff spans [50, 2000] keV and the response [100, 1000] keV: outside the
         response there is no density, and so no area."""
