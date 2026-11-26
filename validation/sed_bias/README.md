@@ -55,3 +55,17 @@ injected index -2.00), fitting the index from the `Em` spectrum alone:
   the data passes the cut there, the response says 34%). This drives the GRB Band alpha to its
   upper limit (+3) in an Em-only fit, as in the unbinned fit with #31; `hist_nn` gives alpha
   -1.13 and the binned response -1.05 (injected -1.02).
+
+### Epsilon interpolation vs bin-uniform (`em_matrix_step.py`, `fit_step_vs_hat.py`)
+
+Same area and `Ei` interpolation, but each `Epsilon` bin's stored probability spread uniformly in
+the bin instead of #31's hats. 3 months, index from `Em` alone:
+
+| | 100 keV - 10 MeV | 200 keV - 5 MeV |
+|---|---|---|
+| `hist_nn`, hats (#31) | -2.087 | -2.107 |
+| `hist_nn`, bin-uniform | -2.070 | -2.058 |
+| `hist_simple`, hats (#31) | -2.062 | -2.112 |
+| `hist_simple`, bin-uniform | -2.044 | -2.078 |
+| NN response (MC) | -2.046 | -2.060 |
+| NN response (MC), 3 h window only | -2.088 | -2.089 |
